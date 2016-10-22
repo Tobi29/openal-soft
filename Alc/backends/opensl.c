@@ -236,11 +236,11 @@ static ALCboolean opensl_reset_playback(ALCdevice *Device)
     SLresult result;
 
 
-    Device->UpdateSize = (ALuint64)Device->UpdateSize * 44100 / Device->Frequency;
+    Device->UpdateSize = (ALuint64)Device->UpdateSize * 48000 / Device->Frequency;
     Device->UpdateSize = Device->UpdateSize * Device->NumUpdates / 2;
     Device->NumUpdates = 2;
 
-    Device->Frequency = 44100;
+    Device->Frequency = 48000;
     Device->FmtChans = DevFmtStereo;
     Device->FmtType = DevFmtShort;
 
