@@ -656,7 +656,8 @@ SET(COMMON_OBJS  common/almalloc.c
                  common/threads.c
                  common/uintmap.c
 )
-SET(OPENAL_OBJS  OpenAL32/alAuxEffectSlot.c
+SET(OPENAL_OBJS  OpenAL32/alAndroidJNI.c
+                 OpenAL32/alAuxEffectSlot.c
                  OpenAL32/alBuffer.c
                  OpenAL32/alEffect.c
                  OpenAL32/alError.c
