@@ -239,7 +239,6 @@ static ALboolean CalcListenerParams(ALCcontext *Context)
 {
     ALlistener *Listener = Context->Listener;
     ALfloat N[3], V[3], U[3], P[3];
-    struct ALlistenerProps *first;
     struct ALlistenerProps *props;
     aluVector vel;
 
@@ -288,23 +287,12 @@ static ALboolean CalcListenerParams(ALCcontext *Context)
     Listener->Params.SourceDistanceModel = ATOMIC_LOAD(&props->SourceDistanceModel, almemory_order_relaxed);
     Listener->Params.DistanceModel = ATOMIC_LOAD(&props->DistanceModel, almemory_order_relaxed);
 
-    /* WARNING: A livelock is theoretically possible if another thread keeps
-     * changing the freelist head without giving this a chance to actually swap
-     * in the old container (practically impossible with this little code,
-     * but...).
-     */
-    first = ATOMIC_LOAD(&Listener->FreeList);
-    do {
-        ATOMIC_STORE(&props->next, first, almemory_order_relaxed);
-    } while(ATOMIC_COMPARE_EXCHANGE_WEAK(struct ALlistenerProps*,
-            &Listener->FreeList, &first, props) == 0);
-
+    ATOMIC_REPLACE_HEAD(struct ALlistenerProps*, &Listener->FreeList, props);
     return AL_TRUE;
 }
 
 static ALboolean CalcEffectSlotParams(ALeffectslot *slot, ALCdevice *device)
 {
-    struct ALeffectslotProps *first;
     struct ALeffectslotProps *props;
     ALeffectState *state;
 
@@ -336,17 +324,7 @@ static ALboolean CalcEffectSlotParams(ALeffectslot *slot, ALCdevice *device)
 
     V(state,update)(device, slot, &props->Props);
 
-    /* WARNING: A livelock is theoretically possible if another thread keeps
-     * changing the freelist head without giving this a chance to actually swap
-     * in the old container (practically impossible with this little code,
-     * but...).
-     */
-    first = ATOMIC_LOAD(&slot->FreeList);
-    do {
-        ATOMIC_STORE(&props->next, first, almemory_order_relaxed);
-    } while(ATOMIC_COMPARE_EXCHANGE_WEAK(struct ALeffectslotProps*,
-            &slot->FreeList, &first, props) == 0);
-
+    ATOMIC_REPLACE_HEAD(struct ALeffectslotProps*, &slot->FreeList, props);
     return AL_TRUE;
 }
 
@@ -1299,7 +1277,6 @@ static void CalcSourceParams(ALvoice *voice, ALCcontext *context, ALboolean forc
 {
     ALsource *source = voice->Source;
     const ALbufferlistitem *BufferListItem;
-    struct ALsourceProps *first;
     struct ALsourceProps *props;
 
     props = ATOMIC_EXCHANGE(struct ALsourceProps*, &source->Update, NULL, almemory_order_acq_rel);
@@ -1309,16 +1286,7 @@ static void CalcSourceParams(ALvoice *voice, ALCcontext *context, ALboolean forc
     {
         voice->Props = *props;
 
-        /* WARNING: A livelock is theoretically possible if another thread
-         * keeps changing the freelist head without giving this a chance to
-         * actually swap in the old container (practically impossible with this
-         * little code, but...).
-         */
-        first = ATOMIC_LOAD(&source->FreeList);
-        do {
-            ATOMIC_STORE(&props->next, first, almemory_order_relaxed);
-        } while(ATOMIC_COMPARE_EXCHANGE_WEAK(struct ALsourceProps*,
-                &source->FreeList, &first, props) == 0);
+        ATOMIC_REPLACE_HEAD(struct ALsourceProps*, &source->FreeList, props);
     }
 
     BufferListItem = ATOMIC_LOAD(&source->queue, almemory_order_relaxed);
@@ -1344,7 +1312,7 @@ static void UpdateContextSources(ALCcontext *ctx, ALeffectslot *slot)
     ALsource *source;
 
     IncrementRef(&ctx->UpdateCount);
-    if(!ATOMIC_LOAD(&ctx->HoldUpdates))
+    if(!ATOMIC_LOAD(&ctx->HoldUpdates, almemory_order_acquire))
     {
         ALboolean force = CalcListenerParams(ctx);
         while(slot)
@@ -1458,12 +1426,12 @@ ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
                 memset(slot->WetBuffer[i], 0, SamplesToDo*sizeof(ALfloat));
         }
 
-        ctx = ATOMIC_LOAD(&device->ContextList);
+        ctx = ATOMIC_LOAD(&device->ContextList, almemory_order_acquire);
         while(ctx)
         {
             ALeffectslot *slotroot;
 
-            slotroot = ATOMIC_LOAD(&ctx->ActiveAuxSlotList);
+            slotroot = ATOMIC_LOAD(&ctx->ActiveAuxSlotList, almemory_order_acquire);
             UpdateContextSources(ctx, slotroot);
 
             slot = slotroot;
@@ -1628,7 +1596,7 @@ ALvoid aluHandleDisconnect(ALCdevice *device)
 
     device->Connected = ALC_FALSE;
 
-    Context = ATOMIC_LOAD(&device->ContextList);
+    Context = ATOMIC_LOAD_SEQ(&device->ContextList);
     while(Context)
     {
         ALvoice *voice, *voice_end;
@@ -1643,9 +1611,9 @@ ALvoid aluHandleDisconnect(ALCdevice *device)
             if(source && source->state == AL_PLAYING)
             {
                 source->state = AL_STOPPED;
-                ATOMIC_STORE(&source->current_buffer, NULL);
-                ATOMIC_STORE(&source->position, 0);
-                ATOMIC_STORE(&source->position_fraction, 0);
+                ATOMIC_STORE(&source->current_buffer, NULL, almemory_order_relaxed);
+                ATOMIC_STORE(&source->position, 0, almemory_order_relaxed);
+                ATOMIC_STORE(&source->position_fraction, 0, almemory_order_release);
             }
 
             voice++;

@@ -399,7 +399,7 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
 
     /* Get source info */
     State          = AL_PLAYING; /* Only called while playing. */
-    BufferListItem = ATOMIC_LOAD(&Source->current_buffer);
+    BufferListItem = ATOMIC_LOAD(&Source->current_buffer, almemory_order_acquire);
     DataPosInt     = ATOMIC_LOAD(&Source->position, almemory_order_relaxed);
     DataPosFrac    = ATOMIC_LOAD(&Source->position_fraction, almemory_order_relaxed);
     Looping        = ATOMIC_LOAD(&Source->looping, almemory_order_relaxed);
@@ -455,7 +455,6 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
                 const ALbuffer *ALBuffer = BufferListItem->buffer;
                 const ALubyte *Data = ALBuffer->data;
                 ALuint DataSize;
-                ALuint pos;
 
                 /* Offset buffer data to current channel */
                 Data += chan*SampleSize;
@@ -467,10 +466,10 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
 
                     /* Load what's left to play from the source buffer, and
                      * clear the rest of the temp buffer */
-                    pos = DataPosInt;
-                    DataSize = minu(SrcBufferSize - SrcDataSize, ALBuffer->SampleLen - pos);
+                    DataSize = minu(SrcBufferSize - SrcDataSize,
+                                    ALBuffer->SampleLen - DataPosInt);
 
-                    LoadSamples(&SrcData[SrcDataSize], &Data[pos * NumChannels*SampleSize],
+                    LoadSamples(&SrcData[SrcDataSize], &Data[DataPosInt * NumChannels*SampleSize],
                                 NumChannels, ALBuffer->FmtType, DataSize);
                     SrcDataSize += DataSize;
 
@@ -484,11 +483,10 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
 
                     /* Load what's left of this loop iteration, then load
                      * repeats of the loop section */
-                    pos = DataPosInt;
-                    DataSize = LoopEnd - pos;
+                    DataSize = LoopEnd - DataPosInt;
                     DataSize = minu(SrcBufferSize - SrcDataSize, DataSize);
 
-                    LoadSamples(&SrcData[SrcDataSize], &Data[pos * NumChannels*SampleSize],
+                    LoadSamples(&SrcData[SrcDataSize], &Data[DataPosInt * NumChannels*SampleSize],
                                 NumChannels, ALBuffer->FmtType, DataSize);
                     SrcDataSize += DataSize;
 
@@ -534,7 +532,7 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
                     }
                     tmpiter = tmpiter->next;
                     if(!tmpiter && Looping)
-                        tmpiter = ATOMIC_LOAD(&Source->queue);
+                        tmpiter = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
                     else if(!tmpiter)
                     {
                         SilenceSamples(&SrcData[SrcDataSize], SrcBufferSize - SrcDataSize);
@@ -677,7 +675,7 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
             if(!(BufferListItem=BufferListItem->next))
             {
                 if(Looping)
-                    BufferListItem = ATOMIC_LOAD(&Source->queue);
+                    BufferListItem = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
                 else
                 {
                     State = AL_STOPPED;
@@ -698,5 +696,5 @@ ALvoid MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALuint Sam
     Source->state = State;
     ATOMIC_STORE(&Source->current_buffer,    BufferListItem, almemory_order_relaxed);
     ATOMIC_STORE(&Source->position,          DataPosInt, almemory_order_relaxed);
-    ATOMIC_STORE(&Source->position_fraction, DataPosFrac);
+    ATOMIC_STORE(&Source->position_fraction, DataPosFrac, almemory_order_release);
 }

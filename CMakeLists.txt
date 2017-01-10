@@ -10,6 +10,9 @@ IF(COMMAND CMAKE_POLICY)
     IF(POLICY CMP0042)
         CMAKE_POLICY(SET CMP0042 NEW)
     ENDIF(POLICY CMP0042)
+    IF(POLICY CMP0054)
+        CMAKE_POLICY(SET CMP0054 NEW)
+    ENDIF(POLICY CMP0054)
 ENDIF(COMMAND CMAKE_POLICY)
 
 SET(CMAKE_MODULE_PATH "${OpenAL_SOURCE_DIR}/cmake")
@@ -26,7 +29,6 @@ INCLUDE(CheckTypeSize)
 include(CheckStructHasMember)
 include(CheckFileOffsetBits)
 include(GNUInstallDirs)
-
 
 SET(CMAKE_ALLOW_LOOSE_LOOP_CONSTRUCTS TRUE)
 
@@ -165,6 +167,8 @@ ENDIF()
 
 # Make sure we have C99-style inline semantics with GCC (4.3 or newer).
 IF(CMAKE_COMPILER_IS_GNUCC)
+    SET(CMAKE_C_FLAGS "-fno-gnu89-inline ${CMAKE_C_FLAGS}")
+
     SET(OLD_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS}")
     # Force no inlining for the next test.
     SET(CMAKE_REQUIRED_FLAGS "${OLD_REQUIRED_FLAGS} -fno-inline")
@@ -1110,6 +1114,25 @@ option(ALSOFT_EMBED_HRTF_DATA "Embed the HRTF data files (increases library foot
 if(ALSOFT_EMBED_HRTF_DATA)
     if(WIN32)
         set(ALC_OBJS  ${ALC_OBJS} Alc/hrtf_res.rc)
+    elseif(APPLE)
+        macro(add_custom_binary FILENAME BIN_NAME)
+            set(outfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}${CMAKE_C_OUTPUT_EXTENSION})
+            set(stubsrcfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}.stub.c)
+            set(stubfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}.stub${CMAKE_C_OUTPUT_EXTENSION})
+            add_custom_command(OUTPUT ${outfile}
+                DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hrtf/${FILENAME}"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/hrtf"
+                COMMAND touch "${stubsrcfile}"
+                COMMAND "${CMAKE_C_COMPILER}" -o "${stubfile}" -c "${stubsrcfile}"
+                COMMAND "${CMAKE_LINKER}" -r -o "${outfile}" -sectcreate binary ${BIN_NAME} ${FILENAME} "${stubfile}"
+                COMMAND rm "${stubsrcfile}" "${stubfile}"
+                COMMENT "Generating ${FILENAME}${CMAKE_C_OUTPUT_EXTENSION}"
+                VERBATIM
+            )
+            set(ALC_OBJS  ${ALC_OBJS} ${outfile})
+        endmacro()
+        add_custom_binary(default-44100.mhr "default_44100")
+        add_custom_binary(default-48000.mhr "default_48000")
     else()
         set(FILENAMES default-44100.mhr default-48000.mhr)
         foreach(FILENAME ${FILENAMES})
@@ -1150,6 +1173,26 @@ ENDIF()
 IF(LIBTYPE STREQUAL "STATIC")
     ADD_DEFINITIONS(-DAL_LIBTYPE_STATIC)
     SET(PKG_CONFIG_CFLAGS -DAL_LIBTYPE_STATIC ${PKG_CONFIG_CFLAGS})
+ENDIF()
+
+FIND_PACKAGE(Git)
+IF(GIT_FOUND AND EXISTS "${OpenAL_SOURCE_DIR}/.git")
+    # Get the current working branch and its latest abbreviated commit hash
+    ADD_CUSTOM_TARGET(build_version
+        ${CMAKE_COMMAND} -D GIT_EXECUTABLE=${GIT_EXECUTABLE}
+                         -D LIB_VERSION=${LIB_VERSION}
+                         -D SRC=${OpenAL_SOURCE_DIR}/version.h.in
+                         -D DST=${OpenAL_BINARY_DIR}/version.h
+                         -P ${OpenAL_SOURCE_DIR}/version.cmake
+        WORKING_DIRECTORY "${OpenAL_SOURCE_DIR}"
+        VERBATIM
+    )
+ELSE()
+    SET(GIT_BRANCH "UNKNOWN")
+    SET(GIT_COMMIT_HASH "unknown")
+    CONFIGURE_FILE(
+        "${OpenAL_SOURCE_DIR}/version.h.in"
+        "${OpenAL_BINARY_DIR}/version.h")
 ENDIF()
 
 # Needed for openal.pc.in
@@ -1215,6 +1258,14 @@ ENDIF()
 IF(HAVE_JACK)
     SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${JACK_INCLUDE_DIRS})
 ENDIF()
+IF(WIN32)
+    IF(MSVC)
+        SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " /SUBSYSTEM:WINDOWS")
+    ELSEIF(CMAKE_COMPILER_IS_GNUCC)
+        SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " -mwindows")
+    ENDIF()
+ENDIF()
+
 SET_TARGET_PROPERTIES(${LIBNAME} PROPERTIES VERSION ${LIB_VERSION}
                                             SOVERSION ${LIB_MAJOR_VERSION})
 IF(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
@@ -1232,7 +1283,7 @@ IF(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
                 MESSAGE(STATUS "WARNING: Cannot find dlltool, disabling .def/.lib generation")
             ENDIF()
         ELSE()
-            SET_TARGET_PROPERTIES(${LIBNAME} PROPERTIES LINK_FLAGS "-Wl,--output-def,${LIBNAME}.def")
+            SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--output-def,${LIBNAME}.def")
             ADD_CUSTOM_COMMAND(TARGET ${LIBNAME} POST_BUILD
                 COMMAND "${SED_EXECUTABLE}" -i -e "s/ @[^ ]*//" ${LIBNAME}.def
                 COMMAND "${DLLTOOL_EXECUTABLE}" -d ${LIBNAME}.def -l ${LIBNAME}.lib -D ${LIBNAME}.dll
@@ -1244,6 +1295,9 @@ IF(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
 ENDIF()
 
 TARGET_LINK_LIBRARIES(${LIBNAME} common ${EXTRA_LIBS})
+IF(TARGET build_version)
+    ADD_DEPENDENCIES(${LIBNAME} build_version)
+ENDIF()
 
 IF(ALSOFT_INSTALL)
     # Add an install target here
