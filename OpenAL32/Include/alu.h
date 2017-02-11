@@ -115,7 +115,7 @@ typedef struct MixHrtfParams {
     HrtfParams *Current;
     struct {
         alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
-        ALint Delay[2];
+        ALsizei Delay[2];
     } Steps;
 } MixHrtfParams;
 
@@ -149,24 +149,25 @@ typedef struct SendParams {
 
 
 typedef const ALfloat* (*ResamplerFunc)(const BsincState *state,
-    const ALfloat *restrict src, ALuint frac, ALuint increment, ALfloat *restrict dst, ALuint dstlen
+    const ALfloat *restrict src, ALuint frac, ALint increment,
+    ALfloat *restrict dst, ALsizei dstlen
 );
 
-typedef void (*MixerFunc)(const ALfloat *data, ALuint OutChans,
+typedef void (*MixerFunc)(const ALfloat *data, ALsizei OutChans,
                           ALfloat (*restrict OutBuffer)[BUFFERSIZE], ALfloat *CurrentGains,
-                          const ALfloat *TargetGains, ALuint Counter, ALuint OutPos,
-                          ALuint BufferSize);
+                          const ALfloat *TargetGains, ALsizei Counter, ALsizei OutPos,
+                          ALsizei BufferSize);
 typedef void (*RowMixerFunc)(ALfloat *OutBuffer, const ALfloat *gains,
-                             const ALfloat (*restrict data)[BUFFERSIZE], ALuint InChans,
-                             ALuint InPos, ALuint BufferSize);
-typedef void (*HrtfMixerFunc)(ALfloat (*restrict OutBuffer)[BUFFERSIZE], ALuint lidx, ALuint ridx,
-                              const ALfloat *data, ALuint Counter, ALuint Offset, ALuint OutPos,
-                              const ALuint IrSize, const MixHrtfParams *hrtfparams,
-                              HrtfState *hrtfstate, ALuint BufferSize);
-typedef void (*HrtfDirectMixerFunc)(ALfloat (*restrict OutBuffer)[BUFFERSIZE],
-                                    ALuint lidx, ALuint ridx, const ALfloat *data, ALuint Offset,
-                                    const ALuint IrSize, ALfloat (*restrict Coeffs)[2],
-                                    ALfloat (*restrict Values)[2], ALuint BufferSize);
+                             const ALfloat (*restrict data)[BUFFERSIZE], ALsizei InChans,
+                             ALsizei InPos, ALsizei BufferSize);
+typedef void (*HrtfMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
+                              const ALfloat *data, ALsizei Counter, ALsizei Offset, ALsizei OutPos,
+                              const ALsizei IrSize, const MixHrtfParams *hrtfparams,
+                              HrtfState *hrtfstate, ALsizei BufferSize);
+typedef void (*HrtfDirectMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
+                                    const ALfloat *data, ALsizei Offset, const ALsizei IrSize,
+                                    ALfloat (*restrict Coeffs)[2], ALfloat (*restrict Values)[2],
+                                    ALsizei BufferSize);
 
 
 #define GAIN_MIX_MAX  (16.0f) /* +24dB */
@@ -312,8 +313,8 @@ void CalcAngleCoeffs(ALfloat azimuth, ALfloat elevation, ALfloat spread, ALfloat
     else                                                                      \
         ComputeAmbientGainsBF((b).Ambi.Map, (b).NumChannels, g, o);           \
 } while (0)
-void ComputeAmbientGainsMC(const ChannelConfig *chancoeffs, ALuint numchans, ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
-void ComputeAmbientGainsBF(const BFChannelConfig *chanmap, ALuint numchans, ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputeAmbientGainsMC(const ChannelConfig *chancoeffs, ALsizei numchans, ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputeAmbientGainsBF(const BFChannelConfig *chanmap, ALsizei numchans, ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
 
 /**
  * ComputePanningGains
@@ -327,8 +328,8 @@ void ComputeAmbientGainsBF(const BFChannelConfig *chanmap, ALuint numchans, ALfl
     else                                                                      \
         ComputePanningGainsBF((b).Ambi.Map, (b).NumChannels, c, g, o);        \
 } while (0)
-void ComputePanningGainsMC(const ChannelConfig *chancoeffs, ALuint numchans, ALuint numcoeffs, const ALfloat coeffs[MAX_AMBI_COEFFS], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
-void ComputePanningGainsBF(const BFChannelConfig *chanmap, ALuint numchans, const ALfloat coeffs[MAX_AMBI_COEFFS], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputePanningGainsMC(const ChannelConfig *chancoeffs, ALsizei numchans, ALsizei numcoeffs, const ALfloat coeffs[MAX_AMBI_COEFFS], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputePanningGainsBF(const BFChannelConfig *chanmap, ALsizei numchans, const ALfloat coeffs[MAX_AMBI_COEFFS], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
 
 /**
  * ComputeFirstOrderGains
@@ -343,15 +344,15 @@ void ComputePanningGainsBF(const BFChannelConfig *chanmap, ALuint numchans, cons
     else                                                                      \
         ComputeFirstOrderGainsBF((b).Ambi.Map, (b).NumChannels, m, g, o);     \
 } while (0)
-void ComputeFirstOrderGainsMC(const ChannelConfig *chancoeffs, ALuint numchans, const ALfloat mtx[4], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
-void ComputeFirstOrderGainsBF(const BFChannelConfig *chanmap, ALuint numchans, const ALfloat mtx[4], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputeFirstOrderGainsMC(const ChannelConfig *chancoeffs, ALsizei numchans, const ALfloat mtx[4], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
+void ComputeFirstOrderGainsBF(const BFChannelConfig *chanmap, ALsizei numchans, const ALfloat mtx[4], ALfloat ingain, ALfloat gains[MAX_OUTPUT_CHANNELS]);
 
 
-ALvoid MixSource(struct ALvoice *voice, struct ALsource *source, ALCdevice *Device, ALuint SamplesToDo);
+void MixSource(struct ALvoice *voice, struct ALsource *Source, ALCdevice *Device, ALsizei SamplesToDo);
 
-ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size);
+void aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size);
 /* Caller must lock the device. */
-ALvoid aluHandleDisconnect(ALCdevice *device);
+void aluHandleDisconnect(ALCdevice *device);
 
 extern ALfloat ConeScale;
 extern ALfloat ZScale;

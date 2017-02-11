@@ -1392,7 +1392,7 @@ DECL_TEMPLATE(ALbyte, aluF2B)
 #undef DECL_TEMPLATE
 
 
-ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
+void aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
 {
     ALuint SamplesToDo;
     ALvoice *voice, *voice_end;
@@ -1400,7 +1400,7 @@ ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
     ALsource *source;
     ALCcontext *ctx;
     FPUCtl oldMode;
-    ALuint i, c;
+    ALsizei i, c;
 
     SetMixerFPUMode(&oldMode);
 
@@ -1486,22 +1486,31 @@ ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
 
         if(device->Hrtf.Handle)
         {
-            int lidx = GetChannelIdxByName(device->RealOut, FrontLeft);
-            int ridx = GetChannelIdxByName(device->RealOut, FrontRight);
-            if(lidx != -1 && ridx != -1)
+            HrtfDirectMixerFunc HrtfMix;
+            ALsizei irsize;
+            int lidx, ridx;
+
+            if(device->AmbiUp)
+                ambiup_process(device->AmbiUp,
+                    device->Dry.Buffer, device->Dry.NumChannels,
+                    SAFE_CONST(ALfloatBUFFERSIZE*,device->FOAOut.Buffer), SamplesToDo
+                );
+
+            lidx = GetChannelIdxByName(device->RealOut, FrontLeft);
+            ridx = GetChannelIdxByName(device->RealOut, FrontRight);
+            assert(lidx != -1 && ridx != -1);
+
+            HrtfMix = SelectHrtfMixer();
+            irsize = device->Hrtf.IrSize;
+            for(c = 0;c < device->Dry.NumChannels;c++)
             {
-                HrtfDirectMixerFunc HrtfMix = SelectHrtfMixer();
-                ALuint irsize = device->Hrtf.IrSize;
-                for(c = 0;c < device->Dry.NumChannels;c++)
-                {
-                    HrtfMix(device->RealOut.Buffer, lidx, ridx,
-                        device->Dry.Buffer[c], device->Hrtf.Offset, irsize,
-                        device->Hrtf.Coeffs[c], device->Hrtf.Values[c],
-                        SamplesToDo
-                    );
-                }
-                device->Hrtf.Offset += SamplesToDo;
+                HrtfMix(device->RealOut.Buffer[lidx], device->RealOut.Buffer[ridx],
+                    device->Dry.Buffer[c], device->Hrtf.Offset, irsize,
+                    device->Hrtf.Coeffs[c], device->Hrtf.Values[c],
+                    SamplesToDo
+                );
             }
+            device->Hrtf.Offset += SamplesToDo;
         }
         else if(device->AmbiDecoder)
         {
@@ -1590,7 +1599,7 @@ ALvoid aluMixData(ALCdevice *device, ALvoid *buffer, ALsizei size)
 }
 
 
-ALvoid aluHandleDisconnect(ALCdevice *device)
+void aluHandleDisconnect(ALCdevice *device)
 {
     ALCcontext *Context;
 

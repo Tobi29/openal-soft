@@ -24,6 +24,7 @@ INCLUDE(CheckIncludeFile)
 INCLUDE(CheckIncludeFiles)
 INCLUDE(CheckSymbolExists)
 INCLUDE(CheckCCompilerFlag)
+INCLUDE(CheckCXXCompilerFlag)
 INCLUDE(CheckCSourceCompiles)
 INCLUDE(CheckTypeSize)
 include(CheckStructHasMember)
@@ -113,6 +114,11 @@ ELSE()
     IF(HAVE_STD_C99)
         SET(CMAKE_C_FLAGS "-std=c99 ${CMAKE_C_FLAGS}")
     ENDIF()
+ENDIF()
+
+CHECK_CXX_COMPILER_FLAG(-std=c++11 HAVE_STD_CXX11)
+IF(HAVE_STD_CXX11)
+    SET(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 ENDIF()
 
 if(NOT WIN32)
@@ -206,6 +212,13 @@ ELSE()
     SET(EXTRA_LIBS atomic ${EXTRA_LIBS})
 ENDIF()
 UNSET(OLD_REQUIRED_LIBRARIES)
+
+# Include liblog for Android logging
+CHECK_LIBRARY_EXISTS(log __android_log_print "" HAVE_LIBLOG)
+IF(HAVE_LIBLOG)
+    SET(EXTRA_LIBS log ${EXTRA_LIBS})
+    SET(CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} log)
+ENDIF()
 
 # Check if we have C99 variable length arrays
 CHECK_C_SOURCE_COMPILES(

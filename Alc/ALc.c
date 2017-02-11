@@ -99,7 +99,7 @@ static struct BackendInfo BackendList[] = {
     { "port", ALCportBackendFactory_getFactory, NULL, NULL, NULL, EmptyFuncs },
 #endif
 #ifdef HAVE_OPENSL
-    { "opensl", NULL, alc_opensl_init, alc_opensl_deinit, alc_opensl_probe, EmptyFuncs },
+    { "opensl", ALCopenslBackendFactory_getFactory, NULL, NULL, NULL, EmptyFuncs },
 #endif
 
     { "null", ALCnullBackendFactory_getFactory, NULL, NULL, NULL, EmptyFuncs },
@@ -1166,6 +1166,76 @@ static void alc_initconfig(void)
 }
 #define DO_INITCONFIG() alcall_once(&alc_config_once, alc_initconfig)
 
+#ifdef __ANDROID__
+#include <jni.h>
+
+static JavaVM *gJavaVM;
+static pthread_key_t gJVMThreadKey;
+
+static void CleanupJNIEnv(void* UNUSED(ptr))
+{
+    JCALL0(gJavaVM,DetachCurrentThread)();
+}
+
+void *Android_GetJNIEnv(void)
+{
+    if(!gJavaVM)
+    {
+        WARN("gJavaVM is NULL!\n");
+        return NULL;
+    }
+
+    /* http://developer.android.com/guide/practices/jni.html
+     *
+     * All threads are Linux threads, scheduled by the kernel. They're usually
+     * started from managed code (using Thread.start), but they can also be
+     * created elsewhere and then attached to the JavaVM. For example, a thread
+     * started with pthread_create can be attached with the JNI
+     * AttachCurrentThread or AttachCurrentThreadAsDaemon functions. Until a
+     * thread is attached, it has no JNIEnv, and cannot make JNI calls.
+     * Attaching a natively-created thread causes a java.lang.Thread object to
+     * be constructed and added to the "main" ThreadGroup, making it visible to
+     * the debugger. Calling AttachCurrentThread on an already-attached thread
+     * is a no-op.
+     */
+    JNIEnv *env = pthread_getspecific(gJVMThreadKey);
+    if(!env)
+    {
+        int status = JCALL(gJavaVM,AttachCurrentThread)(&env, NULL);
+        if(status < 0)
+        {
+            ERR("Failed to attach current thread\n");
+            return NULL;
+        }
+        pthread_setspecific(gJVMThreadKey, env);
+    }
+    return env;
+}
+
+/* Automatically called by JNI. */
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *jvm, void* UNUSED(reserved))
+{
+    void *env;
+    int err;
+
+    gJavaVM = jvm;
+    if(JCALL(gJavaVM,GetEnv)(&env, JNI_VERSION_1_4) != JNI_OK)
+    {
+        ERR("Failed to get JNIEnv with JNI_VERSION_1_4\n");
+        return JNI_ERR;
+    }
+
+    /* Create gJVMThreadKey so we can keep track of the JNIEnv assigned to each
+     * thread. The JNIEnv *must* be detached before the thread is destroyed.
+     */
+    if((err=pthread_key_create(&gJVMThreadKey, CleanupJNIEnv)) != 0)
+        ERR("pthread_key_create failed: %d\n", err);
+    pthread_setspecific(gJVMThreadKey, env);
+    return JNI_VERSION_1_4;
+}
+
+#endif
+
 
 /************************************************
  * Library deinitialization
@@ -1310,8 +1380,8 @@ const ALCchar *DevFmtChannelsString(enum DevFmtChannels chans)
     return "(unknown channels)";
 }
 
-extern inline ALuint FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type);
-ALuint BytesFromDevFmt(enum DevFmtType type)
+extern inline ALsizei FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type);
+ALsizei BytesFromDevFmt(enum DevFmtType type)
 {
     switch(type)
     {
@@ -1325,7 +1395,7 @@ ALuint BytesFromDevFmt(enum DevFmtType type)
     }
     return 0;
 }
-ALuint ChannelsFromDevFmt(enum DevFmtChannels chans)
+ALsizei ChannelsFromDevFmt(enum DevFmtChannels chans)
 {
     switch(chans)
     {
@@ -2055,9 +2125,13 @@ static ALCenum UpdateDeviceParams(ALCdevice *device, const ALCint *attrList)
     if((device->AmbiDecoder && bformatdec_getOrder(device->AmbiDecoder) >= 2))
         size += (ChannelsFromDevFmt(device->FmtChans)+4) * sizeof(device->Dry.Buffer[0]);
     else if(device->Hrtf.Handle || device->Uhj_Encoder || device->AmbiDecoder)
+    {
         size += ChannelsFromDevFmt(device->FmtChans) * sizeof(device->Dry.Buffer[0]);
-    else if(device->FmtChans > DevFmtAmbi1 && device->FmtChans <= DevFmtAmbi3)
+        if(device->AmbiUp) size += 4 * sizeof(device->Dry.Buffer[0]);
+    }
+    else if(device->AmbiUp)
         size += 4 * sizeof(device->Dry.Buffer[0]);
+    TRACE("Allocating "SZFMT" channels, "SZFMT" bytes\n", size/sizeof(device->Dry.Buffer[0]), size);
     device->Dry.Buffer = al_calloc(16, size);
     if(!device->Dry.Buffer)
     {
@@ -2076,8 +2150,7 @@ static ALCenum UpdateDeviceParams(ALCdevice *device, const ALCint *attrList)
         device->RealOut.NumChannels = device->Dry.NumChannels;
     }
 
-    if((device->AmbiDecoder && bformatdec_getOrder(device->AmbiDecoder) >= 2) ||
-       (device->FmtChans > DevFmtAmbi1 && device->FmtChans <= DevFmtAmbi3))
+    if((device->AmbiDecoder && bformatdec_getOrder(device->AmbiDecoder) >= 2) || device->AmbiUp)
     {
         /* Higher-order rendering requires upsampling first-order content, so
          * make sure to mix it separately.
@@ -2090,6 +2163,8 @@ static ALCenum UpdateDeviceParams(ALCdevice *device, const ALCint *attrList)
         device->FOAOut.Buffer = device->Dry.Buffer;
         device->FOAOut.NumChannels = device->Dry.NumChannels;
     }
+    TRACE("Channel config, Dry: %d, FOA: %d, Real: %d\n", device->Dry.NumChannels,
+          device->FOAOut.NumChannels, device->RealOut.NumChannels);
 
     SetMixerFPUMode(&oldMode);
     if(device->DefaultSlot)

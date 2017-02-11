@@ -20,16 +20,6 @@
 #include "AL/alc.h"
 #include "AL/alext.h"
 
-
-#if defined(_WIN64)
-#define SZFMT "%I64u"
-#elif defined(_WIN32)
-#define SZFMT "%u"
-#else
-#define SZFMT "%zu"
-#endif
-
-
 #include "static_assert.h"
 #include "align.h"
 #include "atomic.h"
@@ -38,8 +28,6 @@
 #include "alstring.h"
 #include "almalloc.h"
 #include "threads.h"
-
-#include "hrtf.h"
 
 #ifndef ALC_SOFT_device_clock
 #define ALC_SOFT_device_clock 1
@@ -125,6 +113,15 @@ AL_API void AL_APIENTRY alGetBufferSamplesSOFT(ALuint buffer, ALsizei offset, AL
 AL_API ALboolean AL_APIENTRY alIsBufferFormatSupportedSOFT(ALenum format);
 #endif
 #endif
+#endif
+
+
+#if defined(_WIN64)
+#define SZFMT "%I64u"
+#elif defined(_WIN32)
+#define SZFMT "%u"
+#else
+#define SZFMT "%zu"
 #endif
 
 
@@ -499,9 +496,9 @@ enum DevFmtChannels {
 };
 #define MAX_OUTPUT_CHANNELS  (16)
 
-ALuint BytesFromDevFmt(enum DevFmtType type);
-ALuint ChannelsFromDevFmt(enum DevFmtChannels chans);
-inline ALuint FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type)
+ALsizei BytesFromDevFmt(enum DevFmtType type);
+ALsizei ChannelsFromDevFmt(enum DevFmtChannels chans);
+inline ALsizei FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type)
 {
     return ChannelsFromDevFmt(chans) * BytesFromDevFmt(type);
 }
@@ -562,7 +559,7 @@ enum RenderMode {
 typedef ALfloat ChannelConfig[MAX_AMBI_COEFFS];
 typedef struct BFChannelConfig {
     ALfloat Scale;
-    ALuint Index;
+    ALsizei Index;
 } BFChannelConfig;
 
 typedef union AmbiConfig {
@@ -577,6 +574,10 @@ typedef union AmbiConfig {
 #define HRTF_HISTORY_LENGTH (1<<HRTF_HISTORY_BITS)
 #define HRTF_HISTORY_MASK   (HRTF_HISTORY_LENGTH-1)
 
+#define HRIR_BITS        (7)
+#define HRIR_LENGTH      (1<<HRIR_BITS)
+#define HRIR_MASK        (HRIR_LENGTH-1)
+
 typedef struct HrtfState {
     alignas(16) ALfloat History[HRTF_HISTORY_LENGTH];
     alignas(16) ALfloat Values[HRIR_LENGTH][2];
@@ -584,8 +585,15 @@ typedef struct HrtfState {
 
 typedef struct HrtfParams {
     alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
-    ALuint Delay[2];
+    ALsizei Delay[2];
 } HrtfParams;
+
+typedef struct HrtfEntry {
+    al_string name;
+
+    const struct Hrtf *hrtf;
+} HrtfEntry;
+TYPEDEF_VECTOR(HrtfEntry, vector_HrtfEntry)
 
 
 /* Size for temporary storage of buffer data, in ALfloats. Larger values need
@@ -593,7 +601,7 @@ typedef struct HrtfParams {
  * to be a sensible size, however, as it constrains the max stepping value used
  * for mixing, as well as the maximum number of samples per mixing iteration.
  */
-#define BUFFERSIZE (2048u)
+#define BUFFERSIZE 2048
 
 struct ALCdevice_struct
 {
@@ -643,10 +651,10 @@ struct ALCdevice_struct
         const struct Hrtf *Handle;
 
         /* HRTF filter state for dry buffer content */
-        alignas(16) ALfloat Values[4][HRIR_LENGTH][2];
-        alignas(16) ALfloat Coeffs[4][HRIR_LENGTH][2];
-        ALuint Offset;
-        ALuint IrSize;
+        alignas(16) ALfloat Values[9][HRIR_LENGTH][2];
+        alignas(16) ALfloat Coeffs[9][HRIR_LENGTH][2];
+        ALsizei Offset;
+        ALsizei IrSize;
     } Hrtf;
 
     /* UHJ encoder state */
@@ -682,20 +690,20 @@ struct ALCdevice_struct
          * first-order, 9 for second-order, etc). If the count is 0, Ambi.Map
          * is used instead to map each output to a coefficient index.
          */
-        ALuint CoeffCount;
+        ALsizei CoeffCount;
 
         ALfloat (*Buffer)[BUFFERSIZE];
-        ALuint NumChannels;
+        ALsizei NumChannels;
     } Dry;
 
     /* First-order ambisonics output, to be upsampled to the dry buffer if different. */
     struct {
         AmbiConfig Ambi;
         /* Will only be 4 or 0. */
-        ALuint CoeffCount;
+        ALsizei CoeffCount;
 
         ALfloat (*Buffer)[BUFFERSIZE];
-        ALuint NumChannels;
+        ALsizei NumChannels;
     } FOAOut;
 
     /* "Real" output, which will be written to the device buffer. May alias the
@@ -705,7 +713,7 @@ struct ALCdevice_struct
         enum Channel ChannelName[MAX_OUTPUT_CHANNELS];
 
         ALfloat (*Buffer)[BUFFERSIZE];
-        ALuint NumChannels;
+        ALsizei NumChannels;
     } RealOut;
 
     /* Running count of the mixer invocations, in 31.1 fixed point. This
@@ -906,6 +914,13 @@ void al_print(const char *type, const char *func, const char *fmt, ...) DECL_FOR
 #define AL_PRINT(T, ...) al_print((T), __FUNCTION__, __VA_ARGS__)
 #endif
 
+#ifdef __ANDROID__
+#include <android/log.h>
+#define LOG_ANDROID(T, MSG, ...) __android_log_print(T, "openal", "AL lib: %s: "MSG, __FUNCTION__ , ## __VA_ARGS__)
+#else
+#define LOG_ANDROID(T, MSG, ...) ((void)0)
+#endif
+
 enum LogLevel {
     NoLog,
     LogError,
@@ -923,16 +938,19 @@ extern enum LogLevel LogLevel;
 #define TRACE(...) do {                                                       \
     if(LogLevel >= LogTrace)                                                  \
         AL_PRINT("(II)", __VA_ARGS__);                                        \
+    LOG_ANDROID(ANDROID_LOG_DEBUG, __VA_ARGS__);                              \
 } while(0)
 
 #define WARN(...) do {                                                        \
     if(LogLevel >= LogWarning)                                                \
         AL_PRINT("(WW)", __VA_ARGS__);                                        \
+    LOG_ANDROID(ANDROID_LOG_WARN, __VA_ARGS__);                               \
 } while(0)
 
 #define ERR(...) do {                                                         \
     if(LogLevel >= LogError)                                                  \
         AL_PRINT("(EE)", __VA_ARGS__);                                        \
+    LOG_ANDROID(ANDROID_LOG_ERROR, __VA_ARGS__);                              \
 } while(0)
 
 
