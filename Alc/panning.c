@@ -36,7 +36,7 @@
 #include "bs2b.h"
 
 
-extern inline void CalcXYZCoeffs(ALfloat x, ALfloat y, ALfloat z, ALfloat spread, ALfloat coeffs[MAX_AMBI_COEFFS]);
+extern inline void CalcAngleCoeffs(ALfloat azimuth, ALfloat elevation, ALfloat spread, ALfloat coeffs[MAX_AMBI_COEFFS]);
 
 
 static const ALsizei FuMa2ACN[MAX_AMBI_COEFFS] = {
@@ -192,14 +192,12 @@ void CalcDirectionCoeffs(const ALfloat dir[3], ALfloat spread, ALfloat coeffs[MA
     }
 }
 
-void CalcAngleCoeffs(ALfloat azimuth, ALfloat elevation, ALfloat spread, ALfloat coeffs[MAX_AMBI_COEFFS])
+void CalcAnglePairwiseCoeffs(ALfloat azimuth, ALfloat elevation, ALfloat spread, ALfloat coeffs[MAX_AMBI_COEFFS])
 {
-    ALfloat dir[3] = {
-        sinf(azimuth) * cosf(elevation),
-        sinf(elevation),
-        -cosf(azimuth) * cosf(elevation)
-    };
-    CalcDirectionCoeffs(dir, spread, coeffs);
+    ALfloat sign = (azimuth < 0.0f) ? -1.0f : 1.0f;
+    if(!(fabsf(azimuth) > F_PI_2))
+        azimuth = minf(fabsf(azimuth) * F_PI_2 / (F_PI/6.0f), F_PI_2) * sign;
+    CalcAngleCoeffs(azimuth, elevation, spread, coeffs);
 }
 
 
@@ -237,7 +235,7 @@ void ComputePanningGainsMC(const ChannelConfig *chancoeffs, ALsizei numchans, AL
         float gain = 0.0f;
         for(j = 0;j < numcoeffs;j++)
             gain += chancoeffs[i][j]*coeffs[j];
-        gains[i] = gain * ingain;
+        gains[i] = clampf(gain, 0.0f, 1.0f) * ingain;
     }
     for(;i < MAX_OUTPUT_CHANNELS;i++)
         gains[i] = 0.0f;
@@ -262,7 +260,7 @@ void ComputeFirstOrderGainsMC(const ChannelConfig *chancoeffs, ALsizei numchans,
         float gain = 0.0f;
         for(j = 0;j < 4;j++)
             gain += chancoeffs[i][j] * mtx[j];
-        gains[i] = gain * ingain;
+        gains[i] = clampf(gain, 0.0f, 1.0f) * ingain;
     }
     for(;i < MAX_OUTPUT_CHANNELS;i++)
         gains[i] = 0.0f;
@@ -454,8 +452,8 @@ static bool MakeSpeakerMap(ALCdevice *device, const AmbDecConf *conf, ALsizei sp
 static const ChannelMap MonoCfg[1] = {
     { FrontCenter, { 1.0f } },
 }, StereoCfg[2] = {
-    { FrontLeft,   { 5.00000000e-1f,  2.88675135e-1f, 0.0f,  0.00000000e+0f } },
-    { FrontRight,  { 5.00000000e-1f, -2.88675135e-1f, 0.0f,  0.00000000e+0f } },
+    { FrontLeft,   { 5.00000000e-1f,  2.88675135e-1f, 0.0f,  1.19573156e-1f } },
+    { FrontRight,  { 5.00000000e-1f, -2.88675135e-1f, 0.0f,  1.19573156e-1f } },
 }, QuadCfg[4] = {
     { BackLeft,    { 3.53553391e-1f,  2.04124145e-1f, 0.0f, -2.04124145e-1f } },
     { FrontLeft,   { 3.53553391e-1f,  2.04124145e-1f, 0.0f,  2.04124145e-1f } },
@@ -548,10 +546,10 @@ static void InitPanning(ALCdevice *device)
 
     if(device->FmtChans >= DevFmtAmbi1 && device->FmtChans <= DevFmtAmbi3)
     {
-        const ALsizei *acnmap = (device->AmbiFmt == AmbiFormat_FuMa) ? FuMa2ACN : ACN2ACN;
-        const ALfloat *n3dscale = (device->AmbiFmt == AmbiFormat_FuMa) ? FuMa2N3DScale :
-                                  (device->AmbiFmt == AmbiFormat_ACN_SN3D) ? SN3D2N3DScale :
-                                  /*(device->AmbiFmt == AmbiFormat_ACN_N3D) ?*/ UnitScale;
+        const ALsizei *acnmap = (device->AmbiLayout == AmbiLayout_FuMa) ? FuMa2ACN : ACN2ACN;
+        const ALfloat *n3dscale = (device->AmbiScale == AmbiNorm_FuMa) ? FuMa2N3DScale :
+                                  (device->AmbiScale == AmbiNorm_SN3D) ? SN3D2N3DScale :
+                                  /*(device->AmbiScale == AmbiNorm_N3D) ?*/ UnitScale;
 
         count = (device->FmtChans == DevFmtAmbi3) ? 16 :
                 (device->FmtChans == DevFmtAmbi2) ? 9 :
@@ -569,6 +567,7 @@ static void InitPanning(ALCdevice *device)
         {
             device->FOAOut.Ambi = device->Dry.Ambi;
             device->FOAOut.CoeffCount = device->Dry.CoeffCount;
+            device->FOAOut.NumChannels = 0;
         }
         else
         {
@@ -582,6 +581,7 @@ static void InitPanning(ALCdevice *device)
                 device->FOAOut.Ambi.Map[i].Index = i;
             }
             device->FOAOut.CoeffCount = 0;
+            device->FOAOut.NumChannels = 4;
 
             ambiup_reset(device->AmbiUp, device);
         }
@@ -607,6 +607,65 @@ static void InitPanning(ALCdevice *device)
                 device->FOAOut.Ambi.Coeffs[i][j] = device->Dry.Ambi.Coeffs[i][j] * xyz_scale;
         }
         device->FOAOut.CoeffCount = 4;
+        device->FOAOut.NumChannels = 0;
+    }
+    device->RealOut.NumChannels = 0;
+}
+
+static void InitDistanceComp(ALCdevice *device, const AmbDecConf *conf, const ALsizei speakermap[MAX_OUTPUT_CHANNELS])
+{
+    const char *devname = al_string_get_cstr(device->DeviceName);
+    ALfloat maxdist = 0.0f;
+    ALsizei total = 0;
+    ALsizei i;
+
+    for(i = 0;i < conf->NumSpeakers;i++)
+        maxdist = maxf(maxdist, conf->Speakers[i].Distance);
+
+    if(GetConfigValueBool(devname, "decoder", "distance-comp", 1) && maxdist > 0.0f)
+    {
+        ALfloat srate = (ALfloat)device->Frequency;
+        for(i = 0;i < conf->NumSpeakers;i++)
+        {
+            ALsizei chan = speakermap[i];
+            ALfloat delay;
+
+            /* Distance compensation only delays in steps of the sample rate.
+             * This is a bit less accurate since the delay time falls to the
+             * nearest sample time, but it's far simpler as it doesn't have to
+             * deal with phase offsets. This means at 48khz, for instance, the
+             * distance delay will be in steps of about 7 millimeters.
+             */
+            delay = floorf((maxdist-conf->Speakers[i].Distance) / SPEEDOFSOUNDMETRESPERSEC *
+                           srate + 0.5f);
+            if(delay >= (ALfloat)MAX_DELAY_LENGTH)
+                ERR("Delay for speaker \"%s\" exceeds buffer length (%f >= %u)\n",
+                    al_string_get_cstr(conf->Speakers[i].Name), delay, MAX_DELAY_LENGTH);
+
+            device->ChannelDelay[chan].Length = (ALsizei)clampf(
+                delay, 0.0f, (ALfloat)(MAX_DELAY_LENGTH-1)
+            );
+            device->ChannelDelay[chan].Gain = conf->Speakers[i].Distance / maxdist;
+            TRACE("Channel %u \"%s\" distance compensation: %d samples, %f gain\n", chan,
+                al_string_get_cstr(conf->Speakers[i].Name), device->ChannelDelay[chan].Length,
+                device->ChannelDelay[chan].Gain
+            );
+
+            /* Round up to the next 4th sample, so each channel buffer starts
+             * 16-byte aligned.
+             */
+            total += RoundUp(device->ChannelDelay[chan].Length, 4);
+        }
+    }
+
+    if(total > 0)
+    {
+        device->ChannelDelay[0].Buffer = al_calloc(16, total * sizeof(ALfloat));
+        for(i = 1;i < MAX_OUTPUT_CHANNELS;i++)
+        {
+            size_t len = RoundUp(device->ChannelDelay[i-1].Length, 4);
+            device->ChannelDelay[i].Buffer = device->ChannelDelay[i-1].Buffer + len;
+        }
     }
 }
 
@@ -688,18 +747,17 @@ static void InitCustomPanning(ALCdevice *device, const AmbDecConf *conf, const A
             device->FOAOut.Ambi.Coeffs[i][j] = device->Dry.Ambi.Coeffs[i][j] * xyz_scale;
     }
     device->FOAOut.CoeffCount = 4;
+    device->FOAOut.NumChannels = 0;
+
+    device->RealOut.NumChannels = 0;
+
+    InitDistanceComp(device, conf, speakermap);
 }
 
 static void InitHQPanning(ALCdevice *device, const AmbDecConf *conf, const ALsizei speakermap[MAX_OUTPUT_CHANNELS])
 {
-    const char *devname;
-    int decflags = 0;
     size_t count;
     size_t i;
-
-    devname = al_string_get_cstr(device->DeviceName);
-    if(GetConfigValueBool(devname, "decoder", "distance-comp", 1))
-        decflags |= BFDF_DistanceComp;
 
     if((conf->ChanMask&AMBI_PERIPHONIC_MASK))
     {
@@ -731,24 +789,43 @@ static void InitHQPanning(ALCdevice *device, const AmbDecConf *conf, const ALsiz
         (conf->ChanMask > 0xf) ? (conf->ChanMask > 0x1ff) ? "third" : "second" : "first",
         (conf->ChanMask&AMBI_PERIPHONIC_MASK) ? " periphonic" : ""
     );
-    bformatdec_reset(device->AmbiDecoder, conf, count, device->Frequency,
-                     speakermap, decflags);
+    bformatdec_reset(device->AmbiDecoder, conf, count, device->Frequency, speakermap);
 
-    if(bformatdec_getOrder(device->AmbiDecoder) < 2)
+    if(!(conf->ChanMask > 0xf))
     {
         device->FOAOut.Ambi = device->Dry.Ambi;
         device->FOAOut.CoeffCount = device->Dry.CoeffCount;
+        device->FOAOut.NumChannels = 0;
     }
     else
     {
         memset(&device->FOAOut.Ambi, 0, sizeof(device->FOAOut.Ambi));
-        for(i = 0;i < 4;i++)
+        if((conf->ChanMask&AMBI_PERIPHONIC_MASK))
         {
-            device->FOAOut.Ambi.Map[i].Scale = 1.0f;
-            device->FOAOut.Ambi.Map[i].Index = i;
+            count = 4;
+            for(i = 0;i < count;i++)
+            {
+                device->FOAOut.Ambi.Map[i].Scale = 1.0f;
+                device->FOAOut.Ambi.Map[i].Index = i;
+            }
+        }
+        else
+        {
+            static const int map[3] = { 0, 1, 3 };
+            count = 3;
+            for(i = 0;i < count;i++)
+            {
+                device->FOAOut.Ambi.Map[i].Scale = 1.0f;
+                device->FOAOut.Ambi.Map[i].Index = map[i];
+            }
         }
         device->FOAOut.CoeffCount = 0;
+        device->FOAOut.NumChannels = count;
     }
+
+    device->RealOut.NumChannels = ChannelsFromDevFmt(device->FmtChans);
+
+    InitDistanceComp(device, conf, speakermap);
 }
 
 static void InitHrtfPanning(ALCdevice *device, bool hoa_mode)
@@ -820,6 +897,7 @@ static void InitHrtfPanning(ALCdevice *device, bool hoa_mode)
     {
         device->FOAOut.Ambi = device->Dry.Ambi;
         device->FOAOut.CoeffCount = device->Dry.CoeffCount;
+        device->FOAOut.NumChannels = 0;
     }
     else
     {
@@ -830,9 +908,12 @@ static void InitHrtfPanning(ALCdevice *device, bool hoa_mode)
             device->FOAOut.Ambi.Map[i].Index = i;
         }
         device->FOAOut.CoeffCount = 0;
+        device->FOAOut.NumChannels = 4;
 
         ambiup_reset(device->AmbiUp, device);
     }
+
+    device->RealOut.NumChannels = ChannelsFromDevFmt(device->FmtChans);
 
     memset(device->Hrtf.Coeffs, 0, sizeof(device->Hrtf.Coeffs));
     device->Hrtf.IrSize = BuildBFormatHrtf(device->Hrtf.Handle,
@@ -860,6 +941,9 @@ static void InitUhjPanning(ALCdevice *device)
 
     device->FOAOut.Ambi = device->Dry.Ambi;
     device->FOAOut.CoeffCount = device->Dry.CoeffCount;
+    device->FOAOut.NumChannels = 0;
+
+    device->RealOut.NumChannels = ChannelsFromDevFmt(device->FmtChans);
 }
 
 void aluInitRenderer(ALCdevice *device, ALint hrtf_id, enum HrtfRequestMode hrtf_appreq, enum HrtfRequestMode hrtf_userreq)
@@ -877,6 +961,13 @@ void aluInitRenderer(ALCdevice *device, ALint hrtf_id, enum HrtfRequestMode hrtf
     device->Dry.CoeffCount = 0;
     device->Dry.NumChannels = 0;
 
+    memset(device->ChannelDelay, 0, sizeof(device->ChannelDelay));
+    for(i = 0;i < MAX_OUTPUT_CHANNELS;i++)
+    {
+        device->ChannelDelay[i].Gain = 1.0f;
+        device->ChannelDelay[i].Length = 0;
+    }
+
     if(device->FmtChans != DevFmtStereo)
     {
         ALsizei speakermap[MAX_OUTPUT_CHANNELS];
@@ -892,8 +983,8 @@ void aluInitRenderer(ALCdevice *device, ALint hrtf_id, enum HrtfRequestMode hrtf
         switch(device->FmtChans)
         {
             case DevFmtQuad: layout = "quad"; break;
-            case DevFmtX51: layout = "surround51"; break;
-            case DevFmtX51Rear: layout = "surround51rear"; break;
+            case DevFmtX51: /* fall-through */
+            case DevFmtX51Rear: layout = "surround51"; break;
             case DevFmtX61: layout = "surround61"; break;
             case DevFmtX71: layout = "surround71"; break;
             /* Mono, Stereo, and Ambisonics output don't use custom decoders. */
@@ -1066,6 +1157,8 @@ void aluInitRenderer(ALCdevice *device, ALint hrtf_id, enum HrtfRequestMode hrtf
 no_hrtf:
     TRACE("HRTF disabled\n");
 
+    device->Render_Mode = StereoPair;
+
     ambiup_free(device->AmbiUp);
     device->AmbiUp = NULL;
 
@@ -1077,7 +1170,6 @@ no_hrtf:
     {
         device->Bs2b = al_calloc(16, sizeof(*device->Bs2b));
         bs2b_set_params(device->Bs2b, bs2blevel, device->Frequency);
-        device->Render_Mode = StereoPair;
         TRACE("BS2B enabled\n");
         InitPanning(device);
         return;
@@ -1085,13 +1177,12 @@ no_hrtf:
 
     TRACE("BS2B disabled\n");
 
-    device->Render_Mode = NormalRender;
-    if(ConfigValueStr(al_string_get_cstr(device->DeviceName), NULL, "stereo-panning", &mode))
+    if(ConfigValueStr(al_string_get_cstr(device->DeviceName), NULL, "stereo-encoding", &mode))
     {
-        if(strcasecmp(mode, "paired") == 0)
-            device->Render_Mode = StereoPair;
-        else if(strcasecmp(mode, "uhj") != 0)
-            ERR("Unexpected stereo-panning: %s\n", mode);
+        if(strcasecmp(mode, "uhj") == 0)
+            device->Render_Mode = NormalRender;
+        else if(strcasecmp(mode, "panpot") != 0)
+            ERR("Unexpected stereo-encoding: %s\n", mode);
     }
     if(device->Render_Mode == NormalRender)
     {

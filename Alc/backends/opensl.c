@@ -249,8 +249,9 @@ static int ALCopenslPlayback_mixerProc(void *arg)
     SetRTPriority();
     althrd_setname(althrd_current(), MIXER_THREAD_NAME);
 
-    result = VCALL(self->mBufferQueueObj,GetInterface)(SL_IID_BUFFERQUEUE, &bufferQueue);
-    PRINTERR(result, "bufferQueue->GetInterface SL_IID_BUFFERQUEUE");
+    result = VCALL(self->mBufferQueueObj,GetInterface)(SL_IID_ANDROIDSIMPLEBUFFERQUEUE,
+                                                       &bufferQueue);
+    PRINTERR(result, "bufferQueue->GetInterface SL_IID_ANDROIDSIMPLEBUFFERQUEUE");
     if(SL_RESULT_SUCCESS == result)
     {
         result = VCALL(self->mBufferQueueObj,GetInterface)(SL_IID_PLAY, &player);
@@ -693,8 +694,8 @@ static ClockLatency ALCopenslPlayback_getClockLatency(ALCopenslPlayback *self)
 
     ALCopenslPlayback_lock(self);
     ret.ClockTime = GetDeviceClockTime(device);
-    ret.Latency = ll_ringbuffer_read_space(self->mRing) * DEVICE_CLOCK_RES /
-                  device->Frequency;
+    ret.Latency = ll_ringbuffer_read_space(self->mRing)*device->UpdateSize *
+                  DEVICE_CLOCK_RES / device->Frequency;
     ALCopenslPlayback_unlock(self);
 
     return ret;

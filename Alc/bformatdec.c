@@ -6,6 +6,7 @@
 #include "mixer_defs.h"
 #include "alu.h"
 
+#include "bool.h"
 #include "threads.h"
 #include "almalloc.h"
 
@@ -156,10 +157,6 @@ static void init_bformatdec(void)
 }
 
 
-#define MAX_DELAY_LENGTH 128
-
-#define INVALID_UPSAMPLE_INDEX  INT_MAX
-
 /* NOTE: BandSplitter filters are unused with single-band decoding */
 typedef struct BFormatDec {
     ALboolean Enabled[MAX_OUTPUT_CHANNELS];
@@ -179,21 +176,12 @@ typedef struct BFormatDec {
     alignas(16) ALfloat ChannelMix[BUFFERSIZE];
 
     struct {
-        alignas(16) ALfloat Buffer[MAX_DELAY_LENGTH];
-        ALsizei Length; /* Valid range is [0...MAX_DELAY_LENGTH). */
-    } Delay[MAX_OUTPUT_CHANNELS];
-
-    struct {
-        ALsizei Index;
-
         BandSplitter XOver;
-
         ALfloat Gains[FB_Max];
     } UpSampler[4];
 
     ALsizei NumChannels;
     ALboolean DualBand;
-    ALboolean Periphonic;
 } BFormatDec;
 
 BFormatDec *bformatdec_alloc()
@@ -216,31 +204,14 @@ void bformatdec_free(BFormatDec *dec)
     }
 }
 
-int bformatdec_getOrder(const struct BFormatDec *dec)
-{
-    if(dec->Periphonic)
-    {
-        if(dec->NumChannels > 9) return 3;
-        if(dec->NumChannels > 4) return 2;
-        if(dec->NumChannels > 1) return 1;
-    }
-    else
-    {
-        if(dec->NumChannels > 5) return 3;
-        if(dec->NumChannels > 3) return 2;
-        if(dec->NumChannels > 1) return 1;
-    }
-    return 0;
-}
-
-void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount, ALuint srate, const ALsizei chanmap[MAX_OUTPUT_CHANNELS], int flags)
+void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount, ALuint srate, const ALsizei chanmap[MAX_OUTPUT_CHANNELS])
 {
     static const ALsizei map2DTo3D[MAX_AMBI2D_COEFFS] = {
         0,  1, 3,  4, 8,  9, 15
     };
     const ALfloat *coeff_scale = UnitScale;
-    ALfloat distgain[MAX_OUTPUT_CHANNELS];
-    ALfloat maxdist, ratio;
+    bool periphonic;
+    ALfloat ratio;
     ALsizei i;
 
     al_free(dec->Samples);
@@ -269,15 +240,13 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
         bandsplit_init(&dec->UpSampler[i].XOver, ratio);
     if((conf->ChanMask&AMBI_PERIPHONIC_MASK))
     {
-        dec->Periphonic = AL_TRUE;
+        periphonic = true;
 
-        dec->UpSampler[0].Index = 0;
         dec->UpSampler[0].Gains[FB_HighFreq] = (dec->NumChannels > 9) ? W_SCALE3D_THIRD :
                                                (dec->NumChannels > 4) ? W_SCALE3D_SECOND : 1.0f;
         dec->UpSampler[0].Gains[FB_LowFreq] = 1.0f;
         for(i = 1;i < 4;i++)
         {
-            dec->UpSampler[i].Index = i;
             dec->UpSampler[i].Gains[FB_HighFreq] = (dec->NumChannels > 9) ? XYZ_SCALE3D_THIRD :
                                                    (dec->NumChannels > 4) ? XYZ_SCALE3D_SECOND : 1.0f;
             dec->UpSampler[i].Gains[FB_LowFreq] = 1.0f;
@@ -285,54 +254,19 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
     }
     else
     {
-        dec->Periphonic = AL_FALSE;
+        periphonic = false;
 
-        dec->UpSampler[0].Index = 0;
         dec->UpSampler[0].Gains[FB_HighFreq] = (dec->NumChannels > 5) ? W_SCALE2D_THIRD :
                                                (dec->NumChannels > 3) ? W_SCALE2D_SECOND : 1.0f;
         dec->UpSampler[0].Gains[FB_LowFreq] = 1.0f;
-        for(i = 1;i < 4;i++)
+        for(i = 1;i < 3;i++)
         {
-            dec->UpSampler[i].Index = (i>2) ? i-1 : ((i==2) ? INVALID_UPSAMPLE_INDEX : i);
             dec->UpSampler[i].Gains[FB_HighFreq] = (dec->NumChannels > 5) ? XYZ_SCALE2D_THIRD :
                                                    (dec->NumChannels > 3) ? XYZ_SCALE2D_SECOND : 1.0f;
             dec->UpSampler[i].Gains[FB_LowFreq] = 1.0f;
         }
-    }
-
-    maxdist = 0.0f;
-    for(i = 0;i < conf->NumSpeakers;i++)
-    {
-        maxdist = maxf(maxdist, conf->Speakers[i].Distance);
-        distgain[i] = 1.0f;
-    }
-
-    memset(dec->Delay, 0, sizeof(dec->Delay));
-    if((flags&BFDF_DistanceComp) && maxdist > 0.0f)
-    {
-        for(i = 0;i < conf->NumSpeakers;i++)
-        {
-            ALsizei chan = chanmap[i];
-            ALfloat delay;
-
-            /* Distance compensation only delays in steps of the sample rate.
-             * This is a bit less accurate since the delay time falls to the
-             * nearest sample time, but it's far simpler as it doesn't have to
-             * deal with phase offsets. This means at 48khz, for instance, the
-             * distance delay will be in steps of about 7 millimeters.
-             */
-            delay = floorf((maxdist-conf->Speakers[i].Distance) / SPEEDOFSOUNDMETRESPERSEC *
-                           (ALfloat)srate + 0.5f);
-            if(delay >= (ALfloat)MAX_DELAY_LENGTH)
-                ERR("Delay for speaker \"%s\" exceeds buffer length (%f >= %u)\n",
-                    al_string_get_cstr(conf->Speakers[i].Name), delay, MAX_DELAY_LENGTH);
-
-            dec->Delay[chan].Length = (ALuint)clampf(delay, 0.0f, (ALfloat)(MAX_DELAY_LENGTH-1));
-            distgain[i] = conf->Speakers[i].Distance / maxdist;
-            TRACE("Channel %u \"%s\" distance compensation: %d samples, %f gain\n", chan,
-                al_string_get_cstr(conf->Speakers[i].Name), dec->Delay[chan].Length, distgain[i]
-            );
-        }
+        dec->UpSampler[3].Gains[FB_HighFreq] = 0.0f;
+        dec->UpSampler[3].Gains[FB_LowFreq] = 0.0f;
     }
 
     memset(&dec->Matrix, 0, sizeof(dec->Matrix));
@@ -345,7 +279,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
             ALfloat gain;
             ALsizei j, k;
 
-            if(!dec->Periphonic)
+            if(!periphonic)
             {
                 for(j = 0,k = 0;j < MAX_AMBI2D_COEFFS;j++)
                 {
@@ -356,7 +290,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 5) gain = conf->HFOrderGain[3];
                     if((conf->ChanMask&(1<<l)))
                         dec->Matrix.Single[chan][j] = conf->HFMatrix[i][k++] / coeff_scale[l] *
-                                                      gain * distgain[i];
+                                                      gain;
                 }
             }
             else
@@ -369,7 +303,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 9) gain = conf->HFOrderGain[3];
                     if((conf->ChanMask&(1<<j)))
                         dec->Matrix.Single[chan][j] = conf->HFMatrix[i][k++] / coeff_scale[j] *
-                                                      gain * distgain[i];
+                                                      gain;
                 }
             }
         }
@@ -389,7 +323,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
             ALfloat gain;
             ALsizei j, k;
 
-            if(!dec->Periphonic)
+            if(!periphonic)
             {
                 for(j = 0,k = 0;j < MAX_AMBI2D_COEFFS;j++)
                 {
@@ -400,8 +334,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 5) gain = conf->HFOrderGain[3] * ratio;
                     if((conf->ChanMask&(1<<l)))
                         dec->Matrix.Dual[chan][FB_HighFreq][j] = conf->HFMatrix[i][k++] /
-                                                                 coeff_scale[l] * gain *
-                                                                 distgain[i];
+                                                                 coeff_scale[l] * gain;
                 }
                 for(j = 0,k = 0;j < MAX_AMBI2D_COEFFS;j++)
                 {
@@ -412,8 +345,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 5) gain = conf->LFOrderGain[3] / ratio;
                     if((conf->ChanMask&(1<<l)))
                         dec->Matrix.Dual[chan][FB_LowFreq][j] = conf->LFMatrix[i][k++] /
-                                                                coeff_scale[l] * gain *
-                                                                distgain[i];
+                                                                coeff_scale[l] * gain;
                 }
             }
             else
@@ -426,8 +358,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 9) gain = conf->HFOrderGain[3] * ratio;
                     if((conf->ChanMask&(1<<j)))
                         dec->Matrix.Dual[chan][FB_HighFreq][j] = conf->HFMatrix[i][k++] /
-                                                                 coeff_scale[j] * gain *
-                                                                 distgain[i];
+                                                                 coeff_scale[j] * gain;
                 }
                 for(j = 0,k = 0;j < MAX_AMBI_COEFFS;j++)
                 {
@@ -437,8 +368,7 @@ void bformatdec_reset(BFormatDec *dec, const AmbDecConf *conf, ALsizei chancount
                     else if(j == 9) gain = conf->LFOrderGain[3] / ratio;
                     if((conf->ChanMask&(1<<j)))
                         dec->Matrix.Dual[chan][FB_LowFreq][j] = conf->LFMatrix[i][k++] /
-                                                                coeff_scale[j] * gain *
-                                                                distgain[i];
+                                                                coeff_scale[j] * gain;
                 }
             }
         }
@@ -450,6 +380,7 @@ void bformatdec_process(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[BU
 {
     ALsizei chan, i;
 
+    OutBuffer = ASSUME_ALIGNED(OutBuffer, 16);
     if(dec->DualBand)
     {
         for(i = 0;i < dec->NumChannels;i++)
@@ -471,29 +402,7 @@ void bformatdec_process(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[BU
                 SamplesToDo
             );
 
-            if(dec->Delay[chan].Length > 0)
-            {
-                const ALsizei base = dec->Delay[chan].Length;
-                if(SamplesToDo >= base)
-                {
-                    for(i = 0;i < base;i++)
-                        OutBuffer[chan][i] += dec->Delay[chan].Buffer[i];
-                    for(;i < SamplesToDo;i++)
-                        OutBuffer[chan][i] += dec->ChannelMix[i-base];
-                    memcpy(dec->Delay[chan].Buffer, &dec->ChannelMix[SamplesToDo-base],
-                           base*sizeof(ALfloat));
-                }
-                else
-                {
-                    for(i = 0;i < SamplesToDo;i++)
-                        OutBuffer[chan][i] += dec->Delay[chan].Buffer[i];
-                    memmove(dec->Delay[chan].Buffer, dec->Delay[chan].Buffer+SamplesToDo,
-                            base - SamplesToDo);
-                    memcpy(dec->Delay[chan].Buffer+base-SamplesToDo, dec->ChannelMix,
-                           SamplesToDo*sizeof(ALfloat));
-                }
-            }
-            else for(i = 0;i < SamplesToDo;i++)
+            for(i = 0;i < SamplesToDo;i++)
                 OutBuffer[chan][i] += dec->ChannelMix[i];
         }
     }
@@ -508,29 +417,7 @@ void bformatdec_process(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[BU
             MixMatrixRow(dec->ChannelMix, dec->Matrix.Single[chan], InSamples,
                          dec->NumChannels, 0, SamplesToDo);
 
-            if(dec->Delay[chan].Length > 0)
-            {
-                const ALsizei base = dec->Delay[chan].Length;
-                if(SamplesToDo >= base)
-                {
-                    for(i = 0;i < base;i++)
-                        OutBuffer[chan][i] += dec->Delay[chan].Buffer[i];
-                    for(;i < SamplesToDo;i++)
-                        OutBuffer[chan][i] += dec->ChannelMix[i-base];
-                    memcpy(dec->Delay[chan].Buffer, &dec->ChannelMix[SamplesToDo-base],
-                           base*sizeof(ALfloat));
-                }
-                else
-                {
-                    for(i = 0;i < SamplesToDo;i++)
-                        OutBuffer[chan][i] += dec->Delay[chan].Buffer[i];
-                    memmove(dec->Delay[chan].Buffer, dec->Delay[chan].Buffer+SamplesToDo,
-                            base - SamplesToDo);
-                    memcpy(dec->Delay[chan].Buffer+base-SamplesToDo, dec->ChannelMix,
-                           SamplesToDo*sizeof(ALfloat));
-                }
-            }
-            else for(i = 0;i < SamplesToDo;i++)
+            for(i = 0;i < SamplesToDo;i++)
                 OutBuffer[chan][i] += dec->ChannelMix[i];
         }
     }
@@ -553,10 +440,6 @@ void bformatdec_upSample(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[B
      */
     for(i = 0;i < InChannels;i++)
     {
-        ALsizei dst_chan = dec->UpSampler[i].Index;
-        if(dst_chan == INVALID_UPSAMPLE_INDEX)
-            continue;
-
         /* First, split the first-order components into low and high frequency
          * bands.
          */
@@ -566,13 +449,15 @@ void bformatdec_upSample(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[B
         );
 
         /* Now write each band to the output. */
-        MixMatrixRow(OutBuffer[dst_chan], dec->UpSampler[i].Gains,
+        MixMatrixRow(OutBuffer[i], dec->UpSampler[i].Gains,
             SAFE_CONST(ALfloatBUFFERSIZE*,dec->Samples), FB_Max, 0,
             SamplesToDo
         );
     }
 }
 
+
+#define INVALID_UPSAMPLE_INDEX INT_MAX
 
 static ALsizei GetACNIndex(const BFChannelConfig *chans, ALsizei numchans, ALsizei acn)
 {

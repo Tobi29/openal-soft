@@ -81,7 +81,7 @@
 #  which helps protect against skips when the CPU is under load, but increases
 #  the delay between a sound getting mixed and being heard. Acceptable values
 #  range between 2 and 16.
-#periods = 4
+#periods = 3
 
 ## stereo-mode:
 #  Specifies if stereo output is treated as being headphones or speakers. With
@@ -89,13 +89,14 @@
 #  Valid settings are auto, speakers, and headphones.
 #stereo-mode = auto
 
-## stereo-panning:
-#  Specifies the panning method for non-HRTF stereo output. uhj (default)
-#  creates stereo-compatible two-channel UHJ output, which encodes some
-#  surround sound information, while paired uses standard pair-wise panning
-#  between -30 and +30 degrees. If crossfeed filters are used, uhj panning is
-#  disabled.
-#stereo-panning = uhj
+## stereo-encoding:
+#  Specifies the encoding method for non-HRTF stereo output. 'panpot' (default)
+#  uses standard amplitude panning (aka pair-wise, stereo pair, etc) between
+#  -30 and +30 degrees, while 'uhj' creates stereo-compatible two-channel UHJ
+#  output, which encodes some surround sound information into stereo output
+#  that can be decoded with a surround sound receiver. If crossfeed filters are
+#  used, UHJ is disabled.
+#stereo-encoding = panpot
 
 ## ambi-format:
 #  Specifies the channel order and normalization for the "ambi*" set of channel
@@ -149,7 +150,6 @@
 #  point - nearest sample, no interpolation
 #  linear - extrapolates samples using a linear slope between samples
 #  sinc4 - extrapolates samples using a 4-point Sinc filter
-#  sinc8 - extrapolates samples using an 8-point Sinc filter
 #  bsinc - extrapolates samples using a band-limited Sinc filter (varying
 #          between 12 and 24 points, with anti-aliasing)
 #  Specifying other values will result in using the default (linear).
@@ -174,13 +174,12 @@
 #  can use a non-negligible amount of CPU time if an effect is set on it even
 #  if no sources are feeding it, so this may help when apps use more than the
 #  system can handle.
-#slots = 4
+#slots = 64
 
 ## sends:
-#  Sets the number of auxiliary sends per source. When not specified (default),
-#  it allows the app to request how many it wants. The maximum value currently
-#  possible is 4.
-#sends =
+#  Limits the number of auxiliary sends allowed per source. Setting this higher
+#  than the default has no effect.
+#sends = 16
 
 ## volume-adjust:
 #  A global volume adjustment for source output, expressed in decibels. The
@@ -235,9 +234,8 @@ hq-mode = false
 #  Enables compensation for the speakers' relative distances to the listener.
 #  This applies the necessary delays and attenuation to make the speakers
 #  behave as though they are all equidistant, which is important for proper
-#  playback of 3D sound rendering. Requires the high-quality ambisonic decoder,
-#  as well as the proper distances to be specified in the decoder configuration
-#  file.
+#  playback of 3D sound rendering. Requires the proper distances to be
+#  specified in the decoder configuration file.
 distance-comp = true
 
 ## quad:
@@ -246,14 +244,9 @@ distance-comp = true
 quad =
 
 ## surround51:
-#  Decoder configuration file for 5.1 Surround (Side) channel output. See
-#  docs/ambdec.txt for a description of the file format.
+#  Decoder configuration file for 5.1 Surround (Side and Rear) channel output.
+#  See docs/ambdec.txt for a description of the file format.
 surround51 =
-
-## surround51rear:
-#  Decoder configuration file for 5.1 Surround (Rear) channel output. See
-#  docs/ambdec.txt for a description of the file format.
-surround51rear =
 
 ## surround61:
 #  Decoder configuration file for 6.1 Surround channel output. See

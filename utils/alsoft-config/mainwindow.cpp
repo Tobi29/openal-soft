@@ -101,7 +101,6 @@ static const struct NameValuePair {
     { "Linear", "linear" },
     { "Default (Linear)", "" },
     { "4-Point Sinc", "sinc4" },
-    { "8-Point Sinc", "sinc8" },
     { "Band-limited Sinc", "bsinc" },
 
     { "", "" }
@@ -111,10 +110,10 @@ static const struct NameValuePair {
     { "Headphones", "headphones" },
 
     { "", "" }
-}, stereoPanList[] = {
+}, stereoEncList[] = {
     { "Default", "" },
+    { "Pan Pot", "panpot" },
     { "UHJ", "uhj" },
-    { "Pair-Wise", "paired" },
 
     { "", "" }
 }, ambiFormatList[] = {
@@ -235,9 +234,9 @@ MainWindow::MainWindow(QWidget *parent) :
     for(int i = 0;stereoModeList[i].name[0];i++)
         ui->stereoModeCombo->addItem(stereoModeList[i].name);
     ui->stereoModeCombo->adjustSize();
-    for(int i = 0;stereoPanList[i].name[0];i++)
-        ui->stereoPanningComboBox->addItem(stereoPanList[i].name);
-    ui->stereoPanningComboBox->adjustSize();
+    for(int i = 0;stereoEncList[i].name[0];i++)
+        ui->stereoEncodingComboBox->addItem(stereoEncList[i].name);
+    ui->stereoEncodingComboBox->adjustSize();
     for(int i = 0;ambiFormatList[i].name[0];i++)
         ui->ambiFormatComboBox->addItem(ambiFormatList[i].name);
     ui->ambiFormatComboBox->adjustSize();
@@ -296,9 +295,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
     mSourceCountValidator = new QIntValidator(0, 4096, this);
     ui->srcCountLineEdit->setValidator(mSourceCountValidator);
-    mEffectSlotValidator = new QIntValidator(0, 16, this);
+    mEffectSlotValidator = new QIntValidator(0, 64, this);
     ui->effectSlotLineEdit->setValidator(mEffectSlotValidator);
-    mSourceSendValidator = new QIntValidator(0, 4, this);
+    mSourceSendValidator = new QIntValidator(0, 16, this);
     ui->srcSendLineEdit->setValidator(mSourceSendValidator);
     mSampleRateValidator = new QIntValidator(8000, 192000, this);
     ui->sampleRateCombo->lineEdit()->setValidator(mSampleRateValidator);
@@ -327,17 +326,15 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(ui->periodCountSlider, SIGNAL(valueChanged(int)), this, SLOT(updatePeriodCountEdit(int)));
     connect(ui->periodCountEdit, SIGNAL(editingFinished()), this, SLOT(updatePeriodCountSlider()));
 
-    connect(ui->stereoPanningComboBox, SIGNAL(currentIndexChanged(QString)), this, SLOT(enableApplyButton()));
+    connect(ui->stereoEncodingComboBox, SIGNAL(currentIndexChanged(QString)), this, SLOT(enableApplyButton()));
     connect(ui->ambiFormatComboBox, SIGNAL(currentIndexChanged(QString)), this, SLOT(enableApplyButton()));
 
-    connect(ui->decoderHQModeCheckBox, SIGNAL(stateChanged(int)), this, SLOT(toggleHqState(int)));
+    connect(ui->decoderHQModeCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->decoderDistCompCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->decoderQuadLineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
     connect(ui->decoderQuadButton, SIGNAL(clicked()), this, SLOT(selectQuadDecoderFile()));
     connect(ui->decoder51LineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
     connect(ui->decoder51Button, SIGNAL(clicked()), this, SLOT(select51DecoderFile()));
-    connect(ui->decoder51RearLineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
-    connect(ui->decoder51RearButton, SIGNAL(clicked()), this, SLOT(select51RearDecoderFile()));
     connect(ui->decoder61LineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
     connect(ui->decoder61Button, SIGNAL(clicked()), this, SLOT(select61DecoderFile()));
     connect(ui->decoder71LineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
@@ -598,9 +595,10 @@ void MainWindow::loadConfig(const QString &fname)
 
     QString resampler = settings.value("resampler").toString().trimmed();
     ui->resamplerSlider->setValue(0);
-    /* The "cubic" resampler is no longer supported. It's been replaced by
-     * "sinc4". */
-    if(resampler == "cubic")
+    /* The "cubic" and "sinc8" resamplers are no longer supported. Use "sinc4"
+     * as a fallback.
+     */
+    if(resampler == "cubic" || resampler == "sinc8")
         resampler = "sinc4";
     for(int i = 0;resamplerList[i].name[0];i++)
     {
@@ -639,15 +637,15 @@ void MainWindow::loadConfig(const QString &fname)
         updatePeriodCountSlider();
     }
 
-    QString stereopan = settings.value("stereo-panning").toString();
-    ui->stereoPanningComboBox->setCurrentIndex(0);
+    QString stereopan = settings.value("stereo-encoding").toString();
+    ui->stereoEncodingComboBox->setCurrentIndex(0);
     if(stereopan.isEmpty() == false)
     {
-        QString str = getNameFromValue(stereoPanList, stereopan);
+        QString str = getNameFromValue(stereoEncList, stereopan);
         if(!str.isEmpty())
         {
-            int j = ui->stereoPanningComboBox->findText(str);
-            if(j > 0) ui->stereoPanningComboBox->setCurrentIndex(j);
+            int j = ui->stereoEncodingComboBox->findText(str);
+            if(j > 0) ui->stereoEncodingComboBox->setCurrentIndex(j);
         }
     }
 
@@ -667,11 +665,9 @@ void MainWindow::loadConfig(const QString &fname)
     ui->decoderHQModeCheckBox->setChecked(hqmode);
     bool distcomp = settings.value("decoder/distance-comp", true).toBool();
     ui->decoderDistCompCheckBox->setChecked(distcomp);
-    ui->decoderDistCompCheckBox->setEnabled(hqmode);
 
     ui->decoderQuadLineEdit->setText(settings.value("decoder/quad").toString());
     ui->decoder51LineEdit->setText(settings.value("decoder/surround51").toString());
-    ui->decoder51RearLineEdit->setText(settings.value("decoder/surround51rear").toString());
     ui->decoder61LineEdit->setText(settings.value("decoder/surround61").toString());
     ui->decoder71LineEdit->setText(settings.value("decoder/surround71").toString());
 
@@ -889,7 +885,7 @@ void MainWindow::saveConfig(const QString &fname) const
     settings.setValue("resampler", resamplerList[ui->resamplerSlider->value()].value);
 
     settings.setValue("stereo-mode", getValueFromName(stereoModeList, ui->stereoModeCombo->currentText()));
-    settings.setValue("stereo-panning", getValueFromName(stereoPanList, ui->stereoPanningComboBox->currentText()));
+    settings.setValue("stereo-encoding", getValueFromName(stereoEncList, ui->stereoEncodingComboBox->currentText()));
     settings.setValue("ambi-format", getValueFromName(ambiFormatList, ui->ambiFormatComboBox->currentText()));
 
     settings.setValue("decoder/hq-mode",
@@ -901,7 +897,6 @@ void MainWindow::saveConfig(const QString &fname) const
 
     settings.setValue("decoder/quad", ui->decoderQuadLineEdit->text());
     settings.setValue("decoder/surround51", ui->decoder51LineEdit->text());
-    settings.setValue("decoder/surround51rear", ui->decoder51RearLineEdit->text());
     settings.setValue("decoder/surround61", ui->decoder61LineEdit->text());
     settings.setValue("decoder/surround71", ui->decoder71LineEdit->text());
 
@@ -1114,18 +1109,10 @@ void MainWindow::updatePeriodCountSlider()
 }
 
 
-void MainWindow::toggleHqState(int state)
-{
-    ui->decoderDistCompCheckBox->setEnabled(state);
-    enableApplyButton();
-}
-
 void MainWindow::selectQuadDecoderFile()
 { selectDecoderFile(ui->decoderQuadLineEdit, "Select Quadrophonic Decoder");}
 void MainWindow::select51DecoderFile()
-{ selectDecoderFile(ui->decoder51LineEdit, "Select 5.1 Surround (Side) Decoder");}
-void MainWindow::select51RearDecoderFile()
-{ selectDecoderFile(ui->decoder51RearLineEdit, "Select 5.1 Surround (Rear) Decoder");}
+{ selectDecoderFile(ui->decoder51LineEdit, "Select 5.1 Surround Decoder");}
 void MainWindow::select61DecoderFile()
 { selectDecoderFile(ui->decoder61LineEdit, "Select 6.1 Surround Decoder");}
 void MainWindow::select71DecoderFile()

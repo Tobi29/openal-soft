@@ -1,11 +1,13 @@
 #ifndef _AL_SOURCE_H_
 #define _AL_SOURCE_H_
 
-#define MAX_SENDS                 4
-
+#include "bool.h"
 #include "alMain.h"
 #include "alu.h"
 #include "hrtf.h"
+
+#define MAX_SENDS      16
+#define DEFAULT_SENDS  2
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,6 +25,8 @@ typedef struct ALbufferlistitem {
 
 
 struct ALsourceProps {
+    ATOMIC(struct ALsourceProps*) next;
+
     ATOMIC(ALfloat)   Pitch;
     ATOMIC(ALfloat)   Gain;
     ATOMIC(ALfloat)   OuterGain;
@@ -69,16 +73,33 @@ struct ALsourceProps {
         ATOMIC(ALfloat) HFReference;
         ATOMIC(ALfloat) GainLF;
         ATOMIC(ALfloat) LFReference;
-    } Send[MAX_SENDS];
-
-    ATOMIC(struct ALsourceProps*) next;
+    } Send[];
 };
 
 
 typedef struct ALvoice {
-    struct ALsourceProps Props;
+    struct ALsourceProps *Props;
 
-    struct ALsource *Source;
+    ATOMIC(struct ALsource*) Source;
+    ATOMIC(bool) Playing;
+
+    /* Current buffer queue item being played. */
+    ATOMIC(ALbufferlistitem*) current_buffer;
+
+    /**
+     * Source offset in samples, relative to the currently playing buffer, NOT
+     * the whole queue, and the fractional (fixed-point) offset to the next
+     * sample.
+     */
+    ATOMIC(ALuint) position;
+    ATOMIC(ALuint) position_fraction;
+
+    /**
+     * Number of channels and bytes-per-sample for the attached source's
+     * buffer(s).
+     */
+    ALsizei NumChannels;
+    ALsizei SampleSize;
 
     /** Current target parameters used for mixing. */
     ALint Step;
@@ -92,22 +113,21 @@ typedef struct ALvoice {
 
     alignas(16) ALfloat PrevSamples[MAX_INPUT_CHANNELS][MAX_PRE_SAMPLES];
 
-    BsincState SincState;
+    InterpState ResampleState;
 
     struct {
+        DirectParams Params[MAX_INPUT_CHANNELS];
+
         ALfloat (*Buffer)[BUFFERSIZE];
         ALsizei Channels;
-    } DirectOut;
+    } Direct;
 
     struct {
+        SendParams Params[MAX_INPUT_CHANNELS];
+
         ALfloat (*Buffer)[BUFFERSIZE];
         ALsizei Channels;
-    } SendOut[MAX_SENDS];
-
-    struct {
-        DirectParams Direct;
-        SendParams Send[MAX_SENDS];
-    } Chan[MAX_INPUT_CHANNELS];
+    } Send[];
 } ALvoice;
 
 
@@ -162,7 +182,7 @@ typedef struct ALsource {
         ALfloat HFReference;
         ALfloat GainLF;
         ALfloat LFReference;
-    } Send[MAX_SENDS];
+    } *Send;
 
     /**
      * Last user-specified offset, and the offset type (bytes, samples, or
@@ -175,27 +195,14 @@ typedef struct ALsource {
     ALint SourceType;
 
     /** Source state (initial, playing, paused, or stopped) */
-    ALenum state;
+    ATOMIC(ALenum) state;
     ALenum new_state;
 
-    /** Source Buffer Queue info. */
+    /** Source Buffer Queue head. */
     RWLock queue_lock;
     ATOMIC(ALbufferlistitem*) queue;
-    ATOMIC(ALbufferlistitem*) current_buffer;
-
-    /**
-     * Source offset in samples, relative to the currently playing buffer, NOT
-     * the whole queue, and the fractional (fixed-point) offset to the next
-     * sample.
-     */
-    ATOMIC(ALuint) position;
-    ATOMIC(ALuint) position_fraction;
 
     ATOMIC(ALboolean) looping;
-
-    /** Current buffer sample info. */
-    ALsizei NumChannels;
-    ALsizei SampleSize;
 
     ALenum NeedsUpdate;
 
@@ -222,7 +229,8 @@ inline struct ALsource *RemoveSource(ALCcontext *context, ALuint id)
 
 void UpdateAllSourceProps(ALCcontext *context);
 ALvoid SetSourceState(ALsource *Source, ALCcontext *Context, ALenum state);
-ALboolean ApplyOffset(ALsource *Source);
+ALboolean ApplyOffset(ALsource *Source, ALvoice *voice);
+
 
 ALvoid ReleaseALSources(ALCcontext *Context);
 

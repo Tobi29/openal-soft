@@ -14,11 +14,9 @@ static inline ALfloat lerp32(const ALfloat *restrict vals, ALuint frac)
 { return lerp(vals[0], vals[1], frac * (1.0f/FRACTIONONE)); }
 static inline ALfloat fir4_32(const ALfloat *restrict vals, ALuint frac)
 { return resample_fir4(vals[-1], vals[0], vals[1], vals[2], frac); }
-static inline ALfloat fir8_32(const ALfloat *restrict vals, ALuint frac)
-{ return resample_fir8(vals[-3], vals[-2], vals[-1], vals[0], vals[1], vals[2], vals[3], vals[4], frac); }
 
 
-const ALfloat *Resample_copy32_C(const BsincState* UNUSED(state),
+const ALfloat *Resample_copy32_C(const InterpState* UNUSED(state),
   const ALfloat *restrict src, ALuint UNUSED(frac), ALint UNUSED(increment),
   ALfloat *restrict dst, ALsizei numsamples)
 {
@@ -32,7 +30,7 @@ const ALfloat *Resample_copy32_C(const BsincState* UNUSED(state),
 }
 
 #define DECL_TEMPLATE(Sampler)                                                \
-const ALfloat *Resample_##Sampler##_C(const BsincState* UNUSED(state),        \
+const ALfloat *Resample_##Sampler##_C(const InterpState* UNUSED(state),       \
   const ALfloat *restrict src, ALuint frac, ALint increment,                  \
   ALfloat *restrict dst, ALsizei numsamples)                                  \
 {                                                                             \
@@ -51,21 +49,20 @@ const ALfloat *Resample_##Sampler##_C(const BsincState* UNUSED(state),        \
 DECL_TEMPLATE(point32)
 DECL_TEMPLATE(lerp32)
 DECL_TEMPLATE(fir4_32)
-DECL_TEMPLATE(fir8_32)
 
 #undef DECL_TEMPLATE
 
-const ALfloat *Resample_bsinc32_C(const BsincState *state, const ALfloat *restrict src,
+const ALfloat *Resample_bsinc32_C(const InterpState *state, const ALfloat *restrict src,
                                   ALuint frac, ALint increment, ALfloat *restrict dst,
                                   ALsizei dstlen)
 {
     const ALfloat *fil, *scd, *phd, *spd;
-    const ALfloat sf = state->sf;
-    const ALsizei m = state->m;
-    const ALint l = state->l;
-    ALsizei j_s, j_f, pi, i;
+    const ALfloat sf = state->bsinc.sf;
+    const ALsizei m = state->bsinc.m;
+    ALsizei j_f, pi, i;
     ALfloat pf, r;
 
+    src += state->bsinc.l;
     for(i = 0;i < dstlen;i++)
     {
         // Calculate the phase index and factor.
@@ -74,16 +71,16 @@ const ALfloat *Resample_bsinc32_C(const BsincState *state, const ALfloat *restri
         pf = (frac & ((1<<FRAC_PHASE_BITDIFF)-1)) * (1.0f/(1<<FRAC_PHASE_BITDIFF));
 #undef FRAC_PHASE_BITDIFF
 
-        fil = state->coeffs[pi].filter;
-        scd = state->coeffs[pi].scDelta;
-        phd = state->coeffs[pi].phDelta;
-        spd = state->coeffs[pi].spDelta;
+        fil = ASSUME_ALIGNED(state->bsinc.coeffs[pi].filter, 16);
+        scd = ASSUME_ALIGNED(state->bsinc.coeffs[pi].scDelta, 16);
+        phd = ASSUME_ALIGNED(state->bsinc.coeffs[pi].phDelta, 16);
+        spd = ASSUME_ALIGNED(state->bsinc.coeffs[pi].spDelta, 16);
 
         // Apply the scale and phase interpolated filter.
         r = 0.0f;
-        for(j_f = 0,j_s = l;j_f < m;j_f++,j_s++)
+        for(j_f = 0;j_f < m;j_f++)
             r += (fil[j_f] + sf*scd[j_f] + pf*(phd[j_f] + sf*spd[j_f])) *
-                    src[j_s];
+                    src[j_f];
         dst[i] = r;
 
         frac += increment;

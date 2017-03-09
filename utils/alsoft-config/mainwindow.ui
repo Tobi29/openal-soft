@@ -7,13 +7,13 @@
     <x>0</x>
     <y>0</y>
     <width>564</width>
-    <height>454</height>
+    <height>460</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
     <width>564</width>
-    <height>454</height>
+    <height>460</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -131,8 +131,8 @@ to stereo output.</string>
        <rect>
         <x>380</x>
         <y>20</y>
-        <width>96</width>
-        <height>22</height>
+        <width>91</width>
+        <height>29</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -343,7 +343,7 @@ mixed and being heard.</string>
           </rect>
          </property>
          <property name="placeholderText">
-          <string>4</string>
+          <string>3</string>
          </property>
         </widget>
        </widget>
@@ -428,7 +428,7 @@ frames needed for each mixing update.</string>
         </widget>
        </widget>
       </widget>
-      <widget class="QComboBox" name="stereoPanningComboBox">
+      <widget class="QComboBox" name="stereoEncodingComboBox">
        <property name="geometry">
         <rect>
          <x>130</x>
@@ -438,11 +438,13 @@ frames needed for each mixing update.</string>
         </rect>
        </property>
        <property name="toolTip">
-        <string>Selects the panning method for non-HRTF stereo
-mixing. UHJ creates stereo-compatible two-channel
-output, which encodes some surround information.
-Pair-Wise uses standard pair-wise panning between
--30 and +30 degrees. The default is UHJ.</string>
+        <string>Pan Pot uses standard amplitude panning (aka
+pair-wise, stereo pair, etc) between -30 and +30
+degrees, while UHJ creates a stereo-compatible
+two-channel UHJ mix, which encodes some
+surround sound information into stereo output
+that can be decoded with a surround sound
+receiver.</string>
        </property>
       </widget>
       <widget class="QLabel" name="label_19">
@@ -455,7 +457,7 @@ Pair-Wise uses standard pair-wise panning between
         </rect>
        </property>
        <property name="text">
-        <string>Stereo Panning:</string>
+        <string>Stereo Encoding:</string>
        </property>
        <property name="alignment">
         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
@@ -601,9 +603,8 @@ appropriate speaker configuration you intend to use.</string>
        <string>This applies the necessary delays and attenuation
 to make the speakers behave as though they are
 all equidistant, which is important for proper
-playback of 3D sound rendering. Requires the high
-quality ambisonic renderer, as well as the proper
-distances to be specified in the decoder
+playback of 3D sound rendering. Requires the
+proper distances to be specified in the decoder
 configuration file.</string>
       </property>
       <property name="layoutDirection">
@@ -622,7 +623,7 @@ configuration file.</string>
         <x>-10</x>
         <y>100</y>
         <width>551</width>
-        <height>191</height>
+        <height>161</height>
        </rect>
       </property>
       <property name="title">
@@ -634,9 +635,9 @@ configuration file.</string>
       <widget class="QLineEdit" name="decoderQuadLineEdit">
        <property name="geometry">
         <rect>
-         <x>150</x>
+         <x>120</x>
          <y>30</y>
-         <width>281</width>
+         <width>311</width>
          <height>21</height>
         </rect>
        </property>
@@ -646,7 +647,7 @@ configuration file.</string>
         <rect>
          <x>20</x>
          <y>30</y>
-         <width>121</width>
+         <width>91</width>
          <height>21</height>
         </rect>
        </property>
@@ -673,9 +674,9 @@ configuration file.</string>
       <widget class="QLineEdit" name="decoder51LineEdit">
        <property name="geometry">
         <rect>
-         <x>150</x>
+         <x>120</x>
          <y>60</y>
-         <width>281</width>
+         <width>311</width>
          <height>21</height>
         </rect>
        </property>
@@ -698,62 +699,23 @@ configuration file.</string>
         <rect>
          <x>20</x>
          <y>60</y>
-         <width>121</width>
-         <height>21</height>
-        </rect>
-       </property>
-       <property name="text">
-        <string>5.1 Surround (Side):</string>
-       </property>
-       <property name="alignment">
-        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-       </property>
-      </widget>
-      <widget class="QLabel" name="label_27">
-       <property name="geometry">
-        <rect>
-         <x>20</x>
-         <y>90</y>
-         <width>121</width>
-         <height>21</height>
-        </rect>
-       </property>
-       <property name="text">
-        <string>5.1 Surround (Rear):</string>
-       </property>
-       <property name="alignment">
-        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
-       </property>
-      </widget>
-      <widget class="QLineEdit" name="decoder51RearLineEdit">
-       <property name="geometry">
-        <rect>
-         <x>150</x>
-         <y>90</y>
-         <width>281</width>
-         <height>21</height>
-        </rect>
-       </property>
-      </widget>
-      <widget class="QPushButton" name="decoder51RearButton">
-       <property name="geometry">
-        <rect>
-         <x>440</x>
-         <y>90</y>
          <width>91</width>
          <height>21</height>
         </rect>
        </property>
        <property name="text">
-        <string>Browse...</string>
+        <string>5.1 Surround:</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
        </property>
       </widget>
       <widget class="QLabel" name="label_28">
        <property name="geometry">
         <rect>
          <x>20</x>
-         <y>120</y>
-         <width>121</width>
+         <y>90</y>
+         <width>91</width>
          <height>21</height>
         </rect>
        </property>
@@ -767,9 +729,9 @@ configuration file.</string>
       <widget class="QLineEdit" name="decoder61LineEdit">
        <property name="geometry">
         <rect>
-         <x>150</x>
-         <y>120</y>
-         <width>281</width>
+         <x>120</x>
+         <y>90</y>
+         <width>311</width>
          <height>21</height>
         </rect>
        </property>
@@ -778,7 +740,7 @@ configuration file.</string>
        <property name="geometry">
         <rect>
          <x>440</x>
-         <y>120</y>
+         <y>90</y>
          <width>91</width>
          <height>21</height>
         </rect>
@@ -791,7 +753,7 @@ configuration file.</string>
        <property name="geometry">
         <rect>
          <x>440</x>
-         <y>150</y>
+         <y>120</y>
          <width>91</width>
          <height>21</height>
         </rect>
@@ -803,9 +765,9 @@ configuration file.</string>
       <widget class="QLineEdit" name="decoder71LineEdit">
        <property name="geometry">
         <rect>
-         <x>150</x>
-         <y>150</y>
-         <width>281</width>
+         <x>120</x>
+         <y>120</y>
+         <width>311</width>
          <height>21</height>
         </rect>
        </property>
@@ -814,8 +776,8 @@ configuration file.</string>
        <property name="geometry">
         <rect>
          <x>20</x>
-         <y>150</y>
-         <width>121</width>
+         <y>120</y>
+         <width>91</width>
          <height>21</height>
         </rect>
        </property>
@@ -1625,14 +1587,8 @@ during updates.</string>
 help for systems with apps that try to play more sounds than
 the CPU can handle.</string>
       </property>
-      <property name="inputMask">
-       <string/>
-      </property>
       <property name="maxLength">
-       <number>3</number>
-      </property>
-      <property name="frame">
-       <bool>true</bool>
+       <number>4</number>
       </property>
       <property name="placeholderText">
        <string>256</string>
@@ -1685,17 +1641,11 @@ create. A slot can use a non-negligible amount of CPU time if
 an effect is set on it even if no sources are feeding it, so this
 may help when apps use more than the system can handle.</string>
       </property>
-      <property name="inputMask">
-       <string/>
-      </property>
       <property name="maxLength">
-       <number>1</number>
-      </property>
-      <property name="frame">
-       <bool>true</bool>
+       <number>3</number>
       </property>
       <property name="placeholderText">
-       <string>4</string>
+       <string>64</string>
       </property>
      </widget>
      <widget class="QLabel" name="label_8">
@@ -1724,15 +1674,14 @@ may help when apps use more than the system can handle.</string>
        </rect>
       </property>
       <property name="toolTip">
-       <string>The number of auxiliary sends per source. When not specified,
-it allows the app to request how many it wants. The maximum
-value currently possible is 4.</string>
+       <string>Limits the number of auxiliary sends allowed per source.
+Setting this higher than the default has no effect.</string>
       </property>
       <property name="maxLength">
-       <number>1</number>
+       <number>2</number>
       </property>
       <property name="placeholderText">
-       <string>Auto</string>
+       <string>16</string>
       </property>
      </widget>
      <widget class="QGroupBox" name="cpuExtGroupBox">
@@ -2075,8 +2024,8 @@ added by the ALC_EXT_DEDICATED extension.</string>
        <rect>
         <x>160</x>
         <y>20</y>
-        <width>131</width>
-        <height>22</height>
+        <width>123</width>
+        <height>29</height>
        </rect>
       </property>
       <property name="sizeAdjustPolicy">
@@ -2245,7 +2194,7 @@ added by the ALC_EXT_DEDICATED extension.</string>
      <x>0</x>
      <y>0</y>
      <width>564</width>
-     <height>19</height>
+     <height>27</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuFile">

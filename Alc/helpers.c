@@ -112,6 +112,7 @@ DEFINE_PROPERTYKEY(PKEY_AudioEndpoint_GUID, 0x1da5d803, 0xd492, 0x4edd, 0x8c, 0x
 
 
 extern inline ALuint NextPowerOf2(ALuint value);
+extern inline size_t RoundUp(size_t value, size_t r);
 extern inline ALint fastf2i(ALfloat f);
 extern inline ALuint fastf2u(ALfloat f);
 
@@ -242,10 +243,15 @@ void FillCPUCaps(ALuint capfilter)
         char buf[256];
         while(fgets(buf, sizeof(buf), file) != NULL)
         {
+            size_t len;
             char *str;
 
             if(strncmp(buf, "Features\t:", 10) != 0)
                 continue;
+
+            len = strlen(buf);
+            while(len > 0 && isspace(buf[len-1]))
+                buf[--len] = 0;
 
             TRACE("Got features string:%s\n", buf+10);
 
@@ -272,7 +278,7 @@ void FillCPUCaps(ALuint capfilter)
         ((capfilter&CPU_CAP_SSE2)   ? ((caps&CPU_CAP_SSE2)   ? " +SSE2"   : " -SSE2")   : ""),
         ((capfilter&CPU_CAP_SSE3)   ? ((caps&CPU_CAP_SSE3)   ? " +SSE3"   : " -SSE3")   : ""),
         ((capfilter&CPU_CAP_SSE4_1) ? ((caps&CPU_CAP_SSE4_1) ? " +SSE4.1" : " -SSE4.1") : ""),
-        ((capfilter&CPU_CAP_NEON)   ? ((caps&CPU_CAP_NEON)   ? " +Neon"   : " -Neon")   : ""),
+        ((capfilter&CPU_CAP_NEON)   ? ((caps&CPU_CAP_NEON)   ? " +NEON"   : " -NEON")   : ""),
         ((!capfilter) ? " -none-" : "")
     );
     CPUCapFlags = caps & capfilter;

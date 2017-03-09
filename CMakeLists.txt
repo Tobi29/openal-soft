@@ -7,6 +7,9 @@ PROJECT(OpenAL)
 IF(COMMAND CMAKE_POLICY)
     CMAKE_POLICY(SET CMP0003 NEW)
     CMAKE_POLICY(SET CMP0005 NEW)
+    IF(POLICY CMP0020)
+        CMAKE_POLICY(SET CMP0020 NEW)
+    ENDIF(POLICY CMP0020)
     IF(POLICY CMP0042)
         CMAKE_POLICY(SET CMP0042 NEW)
     ENDIF(POLICY CMP0042)
@@ -59,10 +62,7 @@ if(DEFINED LIB_SUFFIX)
 endif()
 
 
-IF(NOT WIN32)
-    SET(LIBNAME openal)
-ELSE()
-    SET(LIBNAME OpenAL32)
+IF(WIN32)
     ADD_DEFINITIONS("-D_WIN32 -D_WIN32_WINNT=0x0502")
 
     # This option is mainly for static linking OpenAL Soft into another project
@@ -83,10 +83,13 @@ ELSE()
 ENDIF()
 
 
+SET(EXTRA_LIBS "")
+SET(EXTRA_LDFLAGS "")
+
 # QNX's gcc do not uses /usr/include and /usr/lib pathes by default
 IF ("${CMAKE_C_PLATFORM_ID}" STREQUAL "QNX")
     ADD_DEFINITIONS("-I/usr/include")
-    SET(EXTRA_LIBS ${EXTRA_LIBS} -L/usr/lib)
+    SET(EXTRA_LDFLAGS "${EXTRA_LDFLAGS} -L/usr/lib")
 ENDIF()
 
 IF(NOT LIBTYPE)
@@ -328,7 +331,7 @@ ELSE()
 
     # Force enable -fPIC for CMake versions before 2.8.9 (later versions have
     # the POSITION_INDEPENDENT_CODE target property). The static common library
-    # will be linked into the dynamic openal library, which requires all its
+    # will be linked into the dynamic OpenAL library, which requires all its
     # code to be position-independent.
     IF(CMAKE_VERSION VERSION_LESS "2.8.9" AND NOT WIN32)
         CHECK_C_COMPILER_FLAG(-fPIC HAVE_FPIC_SWITCH)
@@ -361,7 +364,7 @@ int main()
             HAVE_STATIC_LIBGCC_SWITCH
         )
         if(HAVE_STATIC_LIBGCC_SWITCH)
-            set(EXTRA_LIBS ${EXTRA_LIBS} -static-libgcc)
+            set(EXTRA_LDFLAGS "${EXTRA_LDFLAGS} -static-libgcc")
         endif()
         set(CMAKE_REQUIRED_LIBRARIES ${OLD_REQUIRED_LIBRARIES})
         unset(OLD_REQUIRED_LIBRARIES)
@@ -409,6 +412,19 @@ ELSE()
     ENDIF()
 
     SET(CMAKE_REQUIRED_FLAGS "${OLD_REQUIRED_FLAGS}")
+ENDIF()
+
+CHECK_C_SOURCE_COMPILES("
+int main()
+{
+    float *ptr;
+    ptr = __builtin_assume_aligned(ptr, 16);
+    return 0;
+}" HAVE___BUILTIN_ASSUME_ALIGNED)
+IF(HAVE___BUILTIN_ASSUME_ALIGNED)
+    SET(ASSUME_ALIGNED_DECL "__builtin_assume_aligned(x, y)")
+ELSE()
+    SET(ASSUME_ALIGNED_DECL "x")
 ENDIF()
 
 SET(SSE_SWITCH "")
@@ -595,7 +611,7 @@ IF(NOT HAVE_WINDOWS_H)
     IF(HAVE_PTHREAD)
         SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -pthread")
         SET(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -pthread")
-        SET(EXTRA_LIBS ${EXTRA_LIBS} -pthread)
+        SET(EXTRA_LDFLAGS "${EXTRA_LDFLAGS} -pthread")
     ENDIF()
 
     CHECK_LIBRARY_EXISTS(pthread pthread_create "" HAVE_LIBPTHREAD)
@@ -1225,64 +1241,63 @@ CONFIGURE_FILE(
     "${OpenAL_BINARY_DIR}/openal.pc"
     @ONLY)
 
-# Build a common library with reusable helpers
-ADD_LIBRARY(common STATIC ${COMMON_OBJS})
-SET_PROPERTY(TARGET common APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-IF(NOT LIBTYPE STREQUAL "STATIC")
-    SET_PROPERTY(TARGET common PROPERTY POSITION_INDEPENDENT_CODE TRUE)
-ENDIF()
-
 # Build main library
 IF(LIBTYPE STREQUAL "STATIC")
-    ADD_LIBRARY(${LIBNAME} STATIC ${COMMON_OBJS} ${OPENAL_OBJS} ${ALC_OBJS})
+    ADD_LIBRARY(OpenAL STATIC ${COMMON_OBJS} ${OPENAL_OBJS} ${ALC_OBJS})
 ELSE()
-    ADD_LIBRARY(${LIBNAME} SHARED ${OPENAL_OBJS} ${ALC_OBJS})
+    ADD_LIBRARY(OpenAL SHARED ${COMMON_OBJS} ${OPENAL_OBJS} ${ALC_OBJS})
 ENDIF()
-SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY COMPILE_DEFINITIONS AL_BUILD_LIBRARY AL_ALEXT_PROTOTYPES)
+SET_PROPERTY(TARGET OpenAL APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+SET_PROPERTY(TARGET OpenAL APPEND PROPERTY COMPILE_DEFINITIONS AL_BUILD_LIBRARY AL_ALEXT_PROTOTYPES)
 IF(WIN32 AND ALSOFT_NO_UID_DEFS)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY COMPILE_DEFINITIONS AL_NO_UID_DEFS)
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY COMPILE_DEFINITIONS AL_NO_UID_DEFS)
 ENDIF()
-SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES "${OpenAL_SOURCE_DIR}/OpenAL32/Include" "${OpenAL_SOURCE_DIR}/Alc")
+SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES "${OpenAL_SOURCE_DIR}/OpenAL32/Include" "${OpenAL_SOURCE_DIR}/Alc")
 IF(HAVE_ALSA)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${ALSA_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${ALSA_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_OSS)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${OSS_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${OSS_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_SOLARIS)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${AUDIOIO_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${AUDIOIO_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_SNDIO)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${SOUNDIO_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${SOUNDIO_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_QSA)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${QSA_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${QSA_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_DSOUND)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${DSOUND_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${DSOUND_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_PORTAUDIO)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${PORTAUDIO_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${PORTAUDIO_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_PULSEAUDIO)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${PULSEAUDIO_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${PULSEAUDIO_INCLUDE_DIRS})
 ENDIF()
 IF(HAVE_JACK)
-    SET_PROPERTY(TARGET ${LIBNAME} APPEND PROPERTY INCLUDE_DIRECTORIES ${JACK_INCLUDE_DIRS})
+    SET_PROPERTY(TARGET OpenAL APPEND PROPERTY INCLUDE_DIRECTORIES ${JACK_INCLUDE_DIRS})
 ENDIF()
 IF(WIN32)
     IF(MSVC)
-        SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " /SUBSYSTEM:WINDOWS")
+        SET_PROPERTY(TARGET OpenAL APPEND_STRING PROPERTY LINK_FLAGS " /SUBSYSTEM:WINDOWS")
     ELSEIF(CMAKE_COMPILER_IS_GNUCC)
-        SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " -mwindows")
+        SET_PROPERTY(TARGET OpenAL APPEND_STRING PROPERTY LINK_FLAGS " -mwindows")
     ENDIF()
 ENDIF()
 
-SET_TARGET_PROPERTIES(${LIBNAME} PROPERTIES VERSION ${LIB_VERSION}
-                                            SOVERSION ${LIB_MAJOR_VERSION})
-IF(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
-    SET_TARGET_PROPERTIES(${LIBNAME} PROPERTIES PREFIX "")
+SET_TARGET_PROPERTIES(OpenAL PROPERTIES VERSION ${LIB_VERSION}
+                                        SOVERSION ${LIB_MAJOR_VERSION})
+IF(NOT WIN32)
+    SET_TARGET_PROPERTIES(OpenAL PROPERTIES OUTPUT_NAME "openal")
+ELSE()
+    SET_TARGET_PROPERTIES(OpenAL PROPERTIES OUTPUT_NAME "OpenAL32")
+ENDIF()
+
+if(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
+    SET_TARGET_PROPERTIES(OpenAL PROPERTIES PREFIX "")
 
     IF(MINGW AND ALSOFT_BUILD_IMPORT_LIB)
         FIND_PROGRAM(SED_EXECUTABLE NAMES sed DOC "sed executable")
@@ -1296,29 +1311,38 @@ IF(WIN32 AND NOT LIBTYPE STREQUAL "STATIC")
                 MESSAGE(STATUS "WARNING: Cannot find dlltool, disabling .def/.lib generation")
             ENDIF()
         ELSE()
-            SET_PROPERTY(TARGET ${LIBNAME} APPEND_STRING PROPERTY LINK_FLAGS " -Wl,--output-def,${LIBNAME}.def")
-            ADD_CUSTOM_COMMAND(TARGET ${LIBNAME} POST_BUILD
-                COMMAND "${SED_EXECUTABLE}" -i -e "s/ @[^ ]*//" ${LIBNAME}.def
-                COMMAND "${DLLTOOL_EXECUTABLE}" -d ${LIBNAME}.def -l ${LIBNAME}.lib -D ${LIBNAME}.dll
-                COMMENT "Stripping ordinals from ${LIBNAME}.def and generating ${LIBNAME}.lib..."
+            SET(EXTRA_LDFLAGS "${EXTRA_LDFLAGS} -Wl,--output-def,OpenAL32.def")
+            ADD_CUSTOM_COMMAND(TARGET OpenAL POST_BUILD
+                COMMAND "${SED_EXECUTABLE}" -i -e "s/ @[^ ]*//" OpenAL32.def
+                COMMAND "${DLLTOOL_EXECUTABLE}" -d OpenAL32.def -l OpenAL32.lib -D OpenAL32.dll
+                COMMENT "Stripping ordinals from OpenAL32.def and generating OpenAL32.lib..."
                 VERBATIM
             )
         ENDIF()
     ENDIF()
 ENDIF()
 
-TARGET_LINK_LIBRARIES(${LIBNAME} common ${EXTRA_LIBS})
+SET_PROPERTY(TARGET OpenAL APPEND_STRING PROPERTY LINK_FLAGS ${EXTRA_LDFLAGS})
+TARGET_LINK_LIBRARIES(OpenAL ${EXTRA_LIBS})
 IF(TARGET build_version)
-    ADD_DEPENDENCIES(${LIBNAME} build_version)
+    ADD_DEPENDENCIES(OpenAL build_version)
 ENDIF()
 
 IF(ALSOFT_INSTALL)
     # Add an install target here
-    INSTALL(TARGETS ${LIBNAME}
+    INSTALL(TARGETS OpenAL EXPORT OpenAL
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     )
+    EXPORT(TARGETS OpenAL
+           NAMESPACE OpenAL::
+           FILE OpenALConfig.cmake)
+    INSTALL(EXPORT OpenAL
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/OpenAL
+            NAMESPACE OpenAL::
+            FILE OpenALConfig.cmake)
     INSTALL(FILES include/AL/al.h
                   include/AL/alc.h
                   include/AL/alext.h
@@ -1389,7 +1413,7 @@ ENDIF()
 IF(ALSOFT_UTILS)
     ADD_EXECUTABLE(openal-info utils/openal-info.c)
     SET_PROPERTY(TARGET openal-info APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-    TARGET_LINK_LIBRARIES(openal-info ${LIBNAME})
+    TARGET_LINK_LIBRARIES(openal-info OpenAL)
 
     ADD_EXECUTABLE(makehrtf utils/makehrtf.c)
     SET_PROPERTY(TARGET makehrtf APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
@@ -1419,11 +1443,10 @@ IF(ALSOFT_UTILS)
 ENDIF()
 
 IF(ALSOFT_TESTS)
-    ADD_LIBRARY(test-common STATIC examples/common/alhelpers.c)
-    SET_PROPERTY(TARGET test-common APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+    SET(TEST_COMMON_OBJS  examples/common/alhelpers.c)
 
-    ADD_EXECUTABLE(altonegen examples/altonegen.c)
-    TARGET_LINK_LIBRARIES(altonegen test-common ${LIBNAME})
+    ADD_EXECUTABLE(altonegen examples/altonegen.c ${COMMON_OBJS} ${TEST_COMMON_OBJS})
+    TARGET_LINK_LIBRARIES(altonegen OpenAL)
     SET_PROPERTY(TARGET altonegen APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
 
     IF(ALSOFT_INSTALL)
@@ -1439,86 +1462,87 @@ IF(ALSOFT_TESTS)
 ENDIF()
 
 IF(ALSOFT_EXAMPLES)
-    IF(SDL2_FOUND AND SDL_SOUND_FOUND)
-        ADD_LIBRARY(ex-common STATIC examples/common/alhelpers.c
-                                     examples/common/sdl_sound.c)
-        SET_PROPERTY(TARGET ex-common APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET ex-common APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                          ${SDL_SOUND_INCLUDE_DIR})
+    IF(SDL2_FOUND)
+        IF(SDL_SOUND_FOUND)
+            SET(EX_COMMON_OBJS  examples/common/alhelpers.c)
 
-        ADD_EXECUTABLE(alstream examples/alstream.c)
-        TARGET_LINK_LIBRARIES(alstream ex-common ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY}
-                                       common ${LIBNAME})
-        SET_PROPERTY(TARGET alstream APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET alstream APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                         ${SDL_SOUND_INCLUDE_DIR})
-
-        ADD_EXECUTABLE(alreverb examples/alreverb.c)
-        TARGET_LINK_LIBRARIES(alreverb ex-common ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY}
-                                       common ${LIBNAME})
-        SET_PROPERTY(TARGET alreverb APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET alreverb APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                         ${SDL_SOUND_INCLUDE_DIR})
-
-        ADD_EXECUTABLE(allatency examples/allatency.c)
-        TARGET_LINK_LIBRARIES(allatency ex-common ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY}
-                                        common ${LIBNAME})
-        SET_PROPERTY(TARGET allatency APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET allatency APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                          ${SDL_SOUND_INCLUDE_DIR})
-
-        ADD_EXECUTABLE(alloopback examples/alloopback.c)
-        TARGET_LINK_LIBRARIES(alloopback ex-common ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY}
-                                         common ${LIBNAME})
-        SET_PROPERTY(TARGET alloopback APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET alloopback APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                           ${SDL_SOUND_INCLUDE_DIR})
-
-        ADD_EXECUTABLE(alhrtf examples/alhrtf.c)
-        TARGET_LINK_LIBRARIES(alhrtf ex-common ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY}
-                                     common ${LIBNAME})
-        SET_PROPERTY(TARGET alhrtf APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-        SET_PROPERTY(TARGET alhrtf APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                       ${SDL_SOUND_INCLUDE_DIR})
-
-        IF(ALSOFT_INSTALL)
-            INSTALL(TARGETS alstream alreverb allatency alloopback alhrtf
-                    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-                    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-                    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            ADD_EXECUTABLE(alstream examples/alstream.c ${COMMON_OBJS} ${EX_COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(alstream ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY} OpenAL)
+            SET_PROPERTY(TARGET alstream APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+            SET_PROPERTY(TARGET alstream APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR}
             )
+
+            ADD_EXECUTABLE(alreverb examples/alreverb.c ${COMMON_OBJS} ${EX_COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(alreverb ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY} OpenAL)
+            SET_PROPERTY(TARGET alreverb APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+            SET_PROPERTY(TARGET alreverb APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR}
+            )
+
+            ADD_EXECUTABLE(allatency examples/allatency.c ${COMMON_OBJS} ${EX_COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(allatency ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY} OpenAL)
+            SET_PROPERTY(TARGET allatency APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+            SET_PROPERTY(TARGET allatency APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR}
+            )
+
+            ADD_EXECUTABLE(alloopback examples/alloopback.c ${COMMON_OBJS} ${EX_COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(alloopback ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY} OpenAL)
+            SET_PROPERTY(TARGET alloopback APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+            SET_PROPERTY(TARGET alloopback APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR}
+            )
+
+            ADD_EXECUTABLE(alhrtf examples/alhrtf.c ${COMMON_OBJS} ${EX_COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(alhrtf ${SDL_SOUND_LIBRARIES} ${SDL2_LIBRARY} OpenAL)
+            SET_PROPERTY(TARGET alhrtf APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
+            SET_PROPERTY(TARGET alhrtf APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR}
+            )
+
+            IF(ALSOFT_INSTALL)
+                INSTALL(TARGETS alstream alreverb allatency alloopback alhrtf
+                        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+                )
+            ENDIF()
+
+            MESSAGE(STATUS "Building SDL_sound example programs")
         ENDIF()
 
         SET(FFVER_OK FALSE)
         IF(FFMPEG_FOUND)
             SET(FFVER_OK TRUE)
-            IF(AVFORMAT_VERSION VERSION_LESS "55.33.100")
-                MESSAGE(STATUS "libavformat is too old! (${AVFORMAT_VERSION}, wanted 55.33.100)")
+            IF(AVFORMAT_VERSION VERSION_LESS "57.56.101")
+                MESSAGE(STATUS "libavformat is too old! (${AVFORMAT_VERSION}, wanted 57.56.101)")
                 SET(FFVER_OK FALSE)
             ENDIF()
-            IF(AVCODEC_VERSION VERSION_LESS "55.52.102")
-                MESSAGE(STATUS "libavcodec is too old! (${AVCODEC_VERSION}, wanted 55.52.102)")
+            IF(AVCODEC_VERSION VERSION_LESS "57.64.101")
+                MESSAGE(STATUS "libavcodec is too old! (${AVCODEC_VERSION}, wanted 57.64.101)")
                 SET(FFVER_OK FALSE)
             ENDIF()
-            IF(AVUTIL_VERSION VERSION_LESS "52.66.100")
-                MESSAGE(STATUS "libavutil is too old! (${AVUTIL_VERSION}, wanted 52.66.100)")
+            IF(AVUTIL_VERSION VERSION_LESS "55.34.101")
+                MESSAGE(STATUS "libavutil is too old! (${AVUTIL_VERSION}, wanted 55.34.101)")
                 SET(FFVER_OK FALSE)
             ENDIF()
-            IF(SWSCALE_VERSION VERSION_LESS "2.5.102")
-                MESSAGE(STATUS "libswscale is too old! (${SWSCALE_VERSION}, wanted 2.5.102)")
+            IF(SWSCALE_VERSION VERSION_LESS "4.2.100")
+                MESSAGE(STATUS "libswscale is too old! (${SWSCALE_VERSION}, wanted 4.2.100)")
                 SET(FFVER_OK FALSE)
             ENDIF()
-            IF(SWRESAMPLE_VERSION VERSION_LESS "0.18.100")
-                MESSAGE(STATUS "libswresample is too old! (${SWRESAMPLE_VERSION}, wanted 0.18.100)")
+            IF(SWRESAMPLE_VERSION VERSION_LESS "2.3.100")
+                MESSAGE(STATUS "libswresample is too old! (${SWRESAMPLE_VERSION}, wanted 2.3.100)")
                 SET(FFVER_OK FALSE)
             ENDIF()
         ENDIF()
-        IF(FFVER_OK AND NOT MSVC)
-            ADD_EXECUTABLE(alffplay examples/alffplay.c)
-            TARGET_LINK_LIBRARIES(alffplay common ex-common ${SDL2_LIBRARY} ${LIBNAME} ${FFMPEG_LIBRARIES})
+        IF(FFVER_OK)
+            ADD_EXECUTABLE(alffplay examples/alffplay.cpp ${COMMON_OBJS})
+            TARGET_LINK_LIBRARIES(alffplay ${SDL2_LIBRARY} OpenAL ${FFMPEG_LIBRARIES})
             SET_PROPERTY(TARGET alffplay APPEND PROPERTY COMPILE_FLAGS ${EXTRA_CFLAGS})
-            SET_PROPERTY(TARGET alffplay APPEND PROPERTY INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR}
-                                                                             ${FFMPEG_INCLUDE_DIRS})
+            SET_PROPERTY(TARGET alffplay APPEND PROPERTY
+                INCLUDE_DIRECTORIES ${SDL2_INCLUDE_DIR} ${FFMPEG_INCLUDE_DIRS}
+            )
 
             IF(ALSOFT_INSTALL)
                 INSTALL(TARGETS alffplay
@@ -1527,9 +1551,7 @@ IF(ALSOFT_EXAMPLES)
                         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
                 )
             ENDIF()
-            MESSAGE(STATUS "Building SDL and FFmpeg example programs")
-        ELSE()
-            MESSAGE(STATUS "Building SDL example programs")
+            MESSAGE(STATUS "Building SDL+FFmpeg example programs")
         ENDIF()
         MESSAGE(STATUS "")
     ENDIF()

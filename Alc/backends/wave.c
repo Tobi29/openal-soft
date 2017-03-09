@@ -157,7 +157,9 @@ static int ALCwaveBackend_mixerProc(void *ptr)
             al_nssleep(restTime);
         else while(avail-done >= device->UpdateSize)
         {
+            ALCwaveBackend_lock(self);
             aluMixData(device, self->mBuffer, device->UpdateSize);
+            ALCwaveBackend_unlock(self);
             done += device->UpdateSize;
 
             if(!IS_LITTLE_ENDIAN)
@@ -281,7 +283,8 @@ static ALCboolean ALCwaveBackend_reset(ALCwaveBackend *self)
         case DevFmtAmbi2:
         case DevFmtAmbi3:
             /* .amb output requires FuMa */
-            device->AmbiFmt = AmbiFormat_FuMa;
+            device->AmbiLayout = AmbiLayout_FuMa;
+            device->AmbiScale = AmbiNorm_FuMa;
             isbformat = 1;
             chanmask = 0;
             break;
