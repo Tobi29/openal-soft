@@ -331,6 +331,8 @@ MainWindow::MainWindow(QWidget *parent) :
 
     connect(ui->decoderHQModeCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->decoderDistCompCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
+    connect(ui->decoderNFEffectsCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
+    connect(ui->decoderNFRefDelaySpinBox, SIGNAL(valueChanged(double)), this, SLOT(enableApplyButton()));
     connect(ui->decoderQuadLineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
     connect(ui->decoderQuadButton, SIGNAL(clicked()), this, SLOT(selectQuadDecoderFile()));
     connect(ui->decoder51LineEdit, SIGNAL(textChanged(QString)), this, SLOT(enableApplyButton()));
@@ -594,7 +596,8 @@ void MainWindow::loadConfig(const QString &fname)
     ui->srcSendLineEdit->insert(settings.value("sends").toString());
 
     QString resampler = settings.value("resampler").toString().trimmed();
-    ui->resamplerSlider->setValue(0);
+    ui->resamplerSlider->setValue(2);
+    ui->resamplerLabel->setText(resamplerList[2].name);
     /* The "cubic" and "sinc8" resamplers are no longer supported. Use "sinc4"
      * as a fallback.
      */
@@ -605,6 +608,7 @@ void MainWindow::loadConfig(const QString &fname)
         if(resampler == resamplerList[i].value)
         {
             ui->resamplerSlider->setValue(i);
+            ui->resamplerLabel->setText(resamplerList[i].name);
             break;
         }
     }
@@ -665,6 +669,10 @@ void MainWindow::loadConfig(const QString &fname)
     ui->decoderHQModeCheckBox->setChecked(hqmode);
     bool distcomp = settings.value("decoder/distance-comp", true).toBool();
     ui->decoderDistCompCheckBox->setChecked(distcomp);
+    bool nfeffects = settings.value("decoder/nfc", true).toBool();
+    ui->decoderNFEffectsCheckBox->setChecked(nfeffects);
+    double refdelay = settings.value("decoder/nfc-ref-delay", 0.0).toDouble();
+    ui->decoderNFRefDelaySpinBox->setValue(refdelay);
 
     ui->decoderQuadLineEdit->setText(settings.value("decoder/quad").toString());
     ui->decoder51LineEdit->setText(settings.value("decoder/surround51").toString());
@@ -893,6 +901,13 @@ void MainWindow::saveConfig(const QString &fname) const
     );
     settings.setValue("decoder/distance-comp",
         ui->decoderDistCompCheckBox->isChecked() ? QString(/*"true"*/) : QString("false")
+    );
+    settings.setValue("decoder/nfc",
+        ui->decoderNFEffectsCheckBox->isChecked() ? QString(/*"true"*/) : QString("false")
+    );
+    double refdelay = ui->decoderNFRefDelaySpinBox->value();
+    settings.setValue("decoder/nfc-ref-delay",
+        (refdelay > 0.0) ? QString::number(refdelay) : QString()
     );
 
     settings.setValue("decoder/quad", ui->decoderQuadLineEdit->text());

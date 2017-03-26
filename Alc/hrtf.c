@@ -77,10 +77,9 @@ static ALsizei CalcAzIndex(ALsizei azcount, ALfloat az)
 }
 
 /* Calculates static HRIR coefficients and delays for the given polar elevation
- * and azimuth in radians. The coefficients are normalized and attenuated by
- * the specified gain.
+ * and azimuth in radians. The coefficients are normalized.
  */
-void GetHrtfCoeffs(const struct Hrtf *Hrtf, ALfloat elevation, ALfloat azimuth, ALfloat spread, ALfloat gain, ALfloat (*coeffs)[2], ALsizei *delays)
+void GetHrtfCoeffs(const struct Hrtf *Hrtf, ALfloat elevation, ALfloat azimuth, ALfloat spread, ALfloat (*coeffs)[2], ALsizei *delays)
 {
     ALsizei evidx, azidx, lidx, ridx;
     ALsizei azcount, evoffset;
@@ -102,41 +101,26 @@ void GetHrtfCoeffs(const struct Hrtf *Hrtf, ALfloat elevation, ALfloat azimuth, 
     ridx = evoffset + ((azcount-azidx) % azcount);
 
     /* Calculate the HRIR delays. */
-    delays[0] = fastf2i(Hrtf->delays[lidx]*dirfact + 0.5f) << HRTFDELAY_BITS;
-    delays[1] = fastf2i(Hrtf->delays[ridx]*dirfact + 0.5f) << HRTFDELAY_BITS;
+    delays[0] = fastf2i(Hrtf->delays[lidx]*dirfact + 0.5f);
+    delays[1] = fastf2i(Hrtf->delays[ridx]*dirfact + 0.5f);
 
     /* Calculate the sample offsets for the HRIR indices. */
     lidx *= Hrtf->irSize;
     ridx *= Hrtf->irSize;
 
-    /* Calculate the normalized and attenuated HRIR coefficients. Zero the
-     * coefficients if gain is too low.
-     */
-    if(gain > 0.0001f)
+    /* Calculate the normalized and attenuated HRIR coefficients. */
+    i = 0;
+    coeffs[i][0] = lerp(PassthruCoeff, Hrtf->coeffs[lidx+i], dirfact) * (1.0f/32767.0f);
+    coeffs[i][1] = lerp(PassthruCoeff, Hrtf->coeffs[ridx+i], dirfact) * (1.0f/32767.0f);
+    for(i = 1;i < Hrtf->irSize;i++)
     {
-        gain /= 32767.0f;
-
-        i = 0;
-        coeffs[i][0] = lerp(PassthruCoeff, Hrtf->coeffs[lidx+i], dirfact)*gain;
-        coeffs[i][1] = lerp(PassthruCoeff, Hrtf->coeffs[ridx+i], dirfact)*gain;
-        for(i = 1;i < Hrtf->irSize;i++)
-        {
-            coeffs[i][0] = Hrtf->coeffs[lidx+i]*gain * dirfact;
-            coeffs[i][1] = Hrtf->coeffs[ridx+i]*gain * dirfact;
-        }
-    }
-    else
-    {
-        for(i = 0;i < Hrtf->irSize;i++)
-        {
-            coeffs[i][0] = 0.0f;
-            coeffs[i][1] = 0.0f;
-        }
+        coeffs[i][0] = Hrtf->coeffs[lidx+i]*(1.0f/32767.0f) * dirfact;
+        coeffs[i][1] = Hrtf->coeffs[ridx+i]*(1.0f/32767.0f) * dirfact;
     }
 }
 
 
-ALsizei BuildBFormatHrtf(const struct Hrtf *Hrtf, ALfloat (*coeffs)[HRIR_LENGTH][2], ALsizei NumChannels, const ALfloat (*restrict AmbiPoints)[2], const ALfloat (*restrict AmbiMatrix)[2][MAX_AMBI_COEFFS], ALsizei AmbiCount)
+ALsizei BuildBFormatHrtf(const struct Hrtf *Hrtf, DirectHrtfState *state, ALsizei NumChannels, const ALfloat (*restrict AmbiPoints)[2], const ALfloat (*restrict AmbiMatrix)[2][MAX_AMBI_COEFFS], ALsizei AmbiCount)
 {
 /* Set this to 2 for dual-band HRTF processing. May require a higher quality
  * band-splitter, or better calculation of the new IR length to deal with the
@@ -206,7 +190,7 @@ ALsizei BuildBFormatHrtf(const struct Hrtf *Hrtf, ALfloat (*coeffs)[HRIR_LENGTH]
             {
                 ALsizei k = 0;
                 for(j = delay;j < HRIR_LENGTH;++j)
-                    coeffs[i][j][0] += temps[b][k++] * AmbiMatrix[c][b][i];
+                    state->Chan[i].Coeffs[j][0] += temps[b][k++] * AmbiMatrix[c][b][i];
             }
         }
         max_length = maxi(max_length, mini(delay + Hrtf->irSize, HRIR_LENGTH));
@@ -235,7 +219,7 @@ ALsizei BuildBFormatHrtf(const struct Hrtf *Hrtf, ALfloat (*coeffs)[HRIR_LENGTH]
             {
                 ALuint k = 0;
                 for(j = delay;j < HRIR_LENGTH;++j)
-                    coeffs[i][j][1] += temps[b][k++] * AmbiMatrix[c][b][i];
+                    state->Chan[i].Coeffs[j][1] += temps[b][k++] * AmbiMatrix[c][b][i];
             }
         }
         max_length = maxi(max_length, mini(delay + Hrtf->irSize, HRIR_LENGTH));

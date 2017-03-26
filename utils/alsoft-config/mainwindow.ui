@@ -31,7 +31,7 @@
       <x>470</x>
       <y>405</y>
       <width>81</width>
-      <height>25</height>
+      <height>21</height>
      </rect>
     </property>
     <property name="text">
@@ -52,9 +52,6 @@
       <height>401</height>
      </rect>
     </property>
-    <property name="currentIndex">
-     <number>0</number>
-    </property>
     <widget class="QWidget" name="tab_3">
      <attribute name="title">
       <string>Playback</string>
@@ -65,7 +62,7 @@
         <x>110</x>
         <y>50</y>
         <width>78</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -114,7 +111,7 @@ float and converted to the output sample type as needed.</string>
         <x>110</x>
         <y>20</y>
         <width>78</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -132,7 +129,7 @@ to stereo output.</string>
         <x>380</x>
         <y>20</y>
         <width>91</width>
-        <height>29</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -226,7 +223,7 @@ to stereo output.</string>
         <x>380</x>
         <y>50</y>
         <width>78</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -302,7 +299,7 @@ mixed and being heard.</string>
            <x>80</x>
            <y>20</y>
            <width>160</width>
-           <height>23</height>
+           <height>21</height>
           </rect>
          </property>
          <property name="minimum">
@@ -339,7 +336,7 @@ mixed and being heard.</string>
            <x>20</x>
            <y>20</y>
            <width>51</width>
-           <height>22</height>
+           <height>21</height>
           </rect>
          </property>
          <property name="placeholderText">
@@ -366,7 +363,7 @@ frames needed for each mixing update.</string>
            <x>60</x>
            <y>20</y>
            <width>160</width>
-           <height>23</height>
+           <height>21</height>
           </rect>
          </property>
          <property name="minimum">
@@ -419,7 +416,7 @@ frames needed for each mixing update.</string>
            <x>0</x>
            <y>20</y>
            <width>51</width>
-           <height>22</height>
+           <height>21</height>
           </rect>
          </property>
          <property name="placeholderText">
@@ -434,7 +431,7 @@ frames needed for each mixing update.</string>
          <x>130</x>
          <y>130</y>
          <width>131</width>
-         <height>22</height>
+         <height>21</height>
         </rect>
        </property>
        <property name="toolTip">
@@ -482,7 +479,7 @@ receiver.</string>
          <x>390</x>
          <y>130</y>
          <width>131</width>
-         <height>22</height>
+         <height>21</height>
         </rect>
        </property>
       </widget>
@@ -621,7 +618,7 @@ configuration file.</string>
       <property name="geometry">
        <rect>
         <x>-10</x>
-        <y>100</y>
+        <y>160</y>
         <width>551</width>
         <height>161</height>
        </rect>
@@ -789,6 +786,94 @@ configuration file.</string>
        </property>
       </widget>
      </widget>
+     <widget class="QCheckBox" name="decoderNFEffectsCheckBox">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>80</y>
+        <width>181</width>
+        <height>21</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Simulates and compensates for low-frequency effects
+caused by the curvature of nearby sound-waves, which
+creates a more realistic perception of sound distance.
+Note that the effect may be stronger or weaker than
+intended if the application doesn't use or specify an
+appropriate unit scale, or if incorrect speaker distances
+are set in the decoder configuration file. Requires High
+Quality Mode to be enabled.</string>
+      </property>
+      <property name="layoutDirection">
+       <enum>Qt::RightToLeft</enum>
+      </property>
+      <property name="text">
+       <string>Near-Field Effects:</string>
+      </property>
+      <property name="checked">
+       <bool>true</bool>
+      </property>
+     </widget>
+     <widget class="QWidget" name="widget_3" native="true">
+      <property name="geometry">
+       <rect>
+        <x>-10</x>
+        <y>110</y>
+        <width>281</width>
+        <height>21</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>The reference delay value for ambisonic output. When
+Channels is set to one of the Ambisonic formats, this
+option enables NFC-HOA output with the specified
+Reference Delay parameter. The specified value can then
+be shared with an appropriate NFC-HOA decoder to
+reproduce correct near-field effects. Keep in mind that
+despite being designed for higher-order ambisonics, this
+applies to first-order output all the same. When left unset,
+normal output is created with no near-field simulation.</string>
+      </property>
+      <widget class="QLabel" name="label_27">
+       <property name="geometry">
+        <rect>
+         <x>20</x>
+         <y>0</y>
+         <width>151</width>
+         <height>21</height>
+        </rect>
+       </property>
+       <property name="text">
+        <string>Near-Field Reference Delay:</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
+       </property>
+      </widget>
+      <widget class="QDoubleSpinBox" name="decoderNFRefDelaySpinBox">
+       <property name="geometry">
+        <rect>
+         <x>180</x>
+         <y>0</y>
+         <width>91</width>
+         <height>21</height>
+        </rect>
+       </property>
+       <property name="suffix">
+        <string>sec</string>
+       </property>
+       <property name="decimals">
+        <number>4</number>
+       </property>
+       <property name="maximum">
+        <double>1000.000000000000000</double>
+       </property>
+       <property name="singleStep">
+        <double>0.010000000000000</double>
+       </property>
+      </widget>
+     </widget>
     </widget>
     <widget class="QWidget" name="tab_5">
      <attribute name="title">
@@ -861,7 +946,7 @@ configuration file.</string>
           <x>420</x>
           <y>20</y>
           <width>81</width>
-          <height>25</height>
+          <height>21</height>
          </rect>
         </property>
         <property name="text">
@@ -902,7 +987,7 @@ listed above.</string>
           <x>420</x>
           <y>50</y>
           <width>81</width>
-          <height>25</height>
+          <height>21</height>
          </rect>
         </property>
         <property name="text">
@@ -938,7 +1023,7 @@ listed above.</string>
         <x>130</x>
         <y>50</y>
         <width>161</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -986,7 +1071,7 @@ application or system to determine if it should be used.</string>
         <x>130</x>
         <y>20</y>
         <width>161</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -1054,9 +1139,6 @@ application or system to determine if it should be used.</string>
         <width>421</width>
         <height>361</height>
        </rect>
-      </property>
-      <property name="currentIndex">
-       <number>0</number>
       </property>
       <widget class="QWidget" name="page">
        <widget class="QCheckBox" name="backendCheckBox">
@@ -1246,7 +1328,7 @@ processing requests. Must be a power of 2.</string>
            <x>10</x>
            <y>30</y>
            <width>301</width>
-           <height>23</height>
+           <height>21</height>
           </rect>
          </property>
          <property name="maximum">
@@ -1579,7 +1661,7 @@ during updates.</string>
         <x>190</x>
         <y>20</y>
         <width>51</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -1632,7 +1714,7 @@ the CPU can handle.</string>
         <x>190</x>
         <y>50</y>
         <width>51</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -1670,7 +1752,7 @@ may help when apps use more than the system can handle.</string>
         <x>190</x>
         <y>80</y>
         <width>51</width>
-        <height>22</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="toolTip">
@@ -2025,7 +2107,7 @@ added by the ALC_EXT_DEDICATED extension.</string>
         <x>160</x>
         <y>20</y>
         <width>123</width>
-        <height>29</height>
+        <height>21</height>
        </rect>
       </property>
       <property name="sizeAdjustPolicy">
@@ -2175,7 +2257,7 @@ added by the ALC_EXT_DEDICATED extension.</string>
       <x>370</x>
       <y>405</y>
       <width>91</width>
-      <height>25</height>
+      <height>21</height>
      </rect>
     </property>
     <property name="text">

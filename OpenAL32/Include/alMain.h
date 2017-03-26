@@ -620,7 +620,18 @@ typedef struct HrtfState {
 typedef struct HrtfParams {
     alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
     ALsizei Delay[2];
+    ALfloat Gain;
 } HrtfParams;
+
+typedef struct DirectHrtfState {
+    /* HRTF filter state for dry buffer content */
+    ALsizei Offset;
+    ALsizei IrSize;
+    struct {
+        alignas(16) ALfloat Values[HRIR_LENGTH][2];
+        alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
+    } Chan[];
+} DirectHrtfState;
 
 typedef struct HrtfEntry {
     al_string name;
@@ -687,19 +698,12 @@ struct ALCdevice_struct
     // Map of Filters for this device
     UIntMap FilterMap;
 
-    /* HRTF filter tables */
-    struct {
-        vector_HrtfEntry List;
-        al_string Name;
-        ALCenum Status;
-        const struct Hrtf *Handle;
-
-        /* HRTF filter state for dry buffer content */
-        alignas(16) ALfloat Values[9][HRIR_LENGTH][2];
-        alignas(16) ALfloat Coeffs[9][HRIR_LENGTH][2];
-        ALsizei Offset;
-        ALsizei IrSize;
-    } Hrtf;
+    /* HRTF state and info */
+    DirectHrtfState *Hrtf;
+    al_string HrtfName;
+    const struct Hrtf *HrtfHandle;
+    vector_HrtfEntry HrtfList;
+    ALCenum HrtfStatus;
 
     /* UHJ encoder state */
     struct Uhj2Encoder *Uhj_Encoder;
@@ -726,6 +730,7 @@ struct ALCdevice_struct
     alignas(16) ALfloat SourceData[BUFFERSIZE];
     alignas(16) ALfloat ResampledData[BUFFERSIZE];
     alignas(16) ALfloat FilteredData[BUFFERSIZE];
+    alignas(16) ALfloat NFCtrlData[BUFFERSIZE];
 
     /* The "dry" path corresponds to the main output. */
     struct {
@@ -738,6 +743,7 @@ struct ALCdevice_struct
 
         ALfloat (*Buffer)[BUFFERSIZE];
         ALsizei NumChannels;
+        ALsizei NumChannelsPerOrder[MAX_AMBI_ORDER+1];
     } Dry;
 
     /* First-order ambisonics output, to be upsampled to the dry buffer if different. */
@@ -759,6 +765,11 @@ struct ALCdevice_struct
         ALfloat (*Buffer)[BUFFERSIZE];
         ALsizei NumChannels;
     } RealOut;
+
+    /* The average speaker distance as determined by the ambdec configuration
+     * (or alternatively, by the NFC-HOA reference delay). Only used for NFC.
+     */
+    ALfloat AvgSpeakerDist;
 
     /* Delay buffers used to compensate for speaker distances. */
     DistanceComp ChannelDelay[MAX_OUTPUT_CHANNELS];
@@ -868,14 +879,8 @@ void AppendCaptureDeviceList(const ALCchar *name);
 void ALCdevice_Lock(ALCdevice *device);
 void ALCdevice_Unlock(ALCdevice *device);
 
-void ALCcontext_DeferUpdates(ALCcontext *context, ALenum type);
+void ALCcontext_DeferUpdates(ALCcontext *context);
 void ALCcontext_ProcessUpdates(ALCcontext *context);
-
-enum {
-    DeferOff = AL_FALSE,
-    DeferAll,
-    DeferAllowPlay
-};
 
 
 typedef struct {
@@ -1013,10 +1018,11 @@ void FillCPUCaps(ALuint capfilter);
 
 vector_al_string SearchDataFiles(const char *match, const char *subdir);
 
-/* Small hack to use a pointer-to-array type as a normal argument type.
- * Shouldn't be used directly. */
+/* Small hack to use a pointer-to-array types as a normal argument type.
+ * Shouldn't be used directly.
+ */
 typedef ALfloat ALfloatBUFFERSIZE[BUFFERSIZE];
-
+typedef ALfloat ALfloat2[2];
 
 #ifdef __cplusplus
 }

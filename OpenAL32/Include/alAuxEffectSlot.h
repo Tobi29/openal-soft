@@ -4,6 +4,7 @@
 #include "alMain.h"
 #include "alEffect.h"
 
+#include "atomic.h"
 #include "align.h"
 
 #ifdef __cplusplus
@@ -75,21 +76,19 @@ static const struct ALeffectStateFactoryVtable T##_ALeffectStateFactory_vtable =
 
 
 struct ALeffectslotProps {
-    ATOMIC(ALfloat)   Gain;
-    ATOMIC(ALboolean) AuxSendAuto;
+    ALfloat   Gain;
+    ALboolean AuxSendAuto;
 
-    ATOMIC(ALenum) Type;
+    ALenum Type;
     ALeffectProps Props;
 
-    ATOMIC(ALeffectState*) State;
+    ALeffectState *State;
 
     ATOMIC(struct ALeffectslotProps*) next;
 };
 
 
 typedef struct ALeffectslot {
-    ALboolean NeedsUpdate;
-
     ALfloat   Gain;
     ALboolean AuxSendAuto;
 
@@ -99,6 +98,8 @@ typedef struct ALeffectslot {
 
         ALeffectState *State;
     } Effect;
+
+    ATOMIC_FLAG PropsClean;
 
     RefCount ref;
 

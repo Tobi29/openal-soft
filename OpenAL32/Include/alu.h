@@ -17,6 +17,7 @@
 
 #include "hrtf.h"
 #include "align.h"
+#include "nfcfilter.h"
 #include "math_defs.h"
 
 
@@ -35,9 +36,9 @@ extern "C" {
 
 struct ALsource;
 struct ALsourceProps;
+struct ALbufferlistitem;
 struct ALvoice;
 struct ALeffectslot;
-struct ALbuffer;
 
 
 /* The number of distinct scale and phase intervals within the filter table. */
@@ -115,21 +116,22 @@ enum ActiveFilters {
 
 
 typedef struct MixHrtfParams {
-    const HrtfParams *Target;
-    HrtfParams *Current;
-    struct {
-        alignas(16) ALfloat Coeffs[HRIR_LENGTH][2];
-        ALsizei Delay[2];
-    } Steps;
+    const ALfloat (*Coeffs)[2];
+    ALsizei Delay[2];
+    ALfloat Gain;
+    ALfloat GainStep;
 } MixHrtfParams;
+
 
 typedef struct DirectParams {
     enum ActiveFilters FilterType;
     ALfilterState LowPass;
     ALfilterState HighPass;
 
+    NfcFilter NFCtrlFilter[MAX_AMBI_ORDER];
+
     struct {
-        HrtfParams Current;
+        HrtfParams Old;
         HrtfParams Target;
         HrtfState State;
     } Hrtf;
@@ -151,6 +153,62 @@ typedef struct SendParams {
     } Gains;
 } SendParams;
 
+/* If not 'moving', gain targets are used directly without fading. */
+#define VOICE_IS_MOVING (1<<0)
+#define VOICE_IS_HRTF   (1<<1)
+#define VOICE_HAS_NFC   (1<<2)
+
+typedef struct ALvoice {
+    struct ALsourceProps *Props;
+
+    ATOMIC(struct ALsource*) Source;
+    ATOMIC(bool) Playing;
+
+    /* Current buffer queue item being played. */
+    ATOMIC(struct ALbufferlistitem*) current_buffer;
+
+    /**
+     * Source offset in samples, relative to the currently playing buffer, NOT
+     * the whole queue, and the fractional (fixed-point) offset to the next
+     * sample.
+     */
+    ATOMIC(ALuint) position;
+    ATOMIC(ALuint) position_fraction;
+
+    /**
+     * Number of channels and bytes-per-sample for the attached source's
+     * buffer(s).
+     */
+    ALsizei NumChannels;
+    ALsizei SampleSize;
+
+    /** Current target parameters used for mixing. */
+    ALint Step;
+
+    ALuint Flags;
+
+    ALuint Offset; /* Number of output samples mixed since starting. */
+
+    alignas(16) ALfloat PrevSamples[MAX_INPUT_CHANNELS][MAX_PRE_SAMPLES];
+
+    InterpState ResampleState;
+
+    struct {
+        DirectParams Params[MAX_INPUT_CHANNELS];
+
+        ALfloat (*Buffer)[BUFFERSIZE];
+        ALsizei Channels;
+        ALsizei ChannelsPerOrder[MAX_AMBI_ORDER+1];
+    } Direct;
+
+    struct {
+        SendParams Params[MAX_INPUT_CHANNELS];
+
+        ALfloat (*Buffer)[BUFFERSIZE];
+        ALsizei Channels;
+    } Send[];
+} ALvoice;
+
 
 typedef const ALfloat* (*ResamplerFunc)(const InterpState *state,
     const ALfloat *restrict src, ALuint frac, ALint increment,
@@ -165,13 +223,13 @@ typedef void (*RowMixerFunc)(ALfloat *OutBuffer, const ALfloat *gains,
                              const ALfloat (*restrict data)[BUFFERSIZE], ALsizei InChans,
                              ALsizei InPos, ALsizei BufferSize);
 typedef void (*HrtfMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
-                              const ALfloat *data, ALsizei Counter, ALsizei Offset, ALsizei OutPos,
-                              const ALsizei IrSize, const MixHrtfParams *hrtfparams,
+                              const ALfloat *data, ALsizei Offset, ALsizei OutPos,
+                              const ALsizei IrSize, MixHrtfParams *hrtfparams,
                               HrtfState *hrtfstate, ALsizei BufferSize);
 typedef void (*HrtfDirectMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
                                     const ALfloat *data, ALsizei Offset, const ALsizei IrSize,
-                                    ALfloat (*restrict Coeffs)[2], ALfloat (*restrict Values)[2],
-                                    ALsizei BufferSize);
+                                    const ALfloat (*restrict Coeffs)[2],
+                                    ALfloat (*restrict Values)[2], ALsizei BufferSize);
 
 
 #define GAIN_MIX_MAX  (16.0f) /* +24dB */

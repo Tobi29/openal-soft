@@ -93,13 +93,13 @@ RowMixerFunc SelectRowMixer(void)
 
 static inline HrtfMixerFunc SelectHrtfMixer(void)
 {
-#ifdef HAVE_SSE
-    if((CPUCapFlags&CPU_CAP_SSE))
-        return MixHrtf_SSE;
-#endif
 #ifdef HAVE_NEON
     if((CPUCapFlags&CPU_CAP_NEON))
         return MixHrtf_Neon;
+#endif
+#ifdef HAVE_SSE
+    if((CPUCapFlags&CPU_CAP_SSE))
+        return MixHrtf_SSE;
 #endif
 
     return MixHrtf_C;
@@ -368,37 +368,37 @@ static const ALfloat *DoFilters(ALfilterState *lpfilter, ALfilterState *hpfilter
 
 ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei SamplesToDo)
 {
-    ResamplerFunc Resample;
     ALbufferlistitem *BufferListItem;
-    ALuint DataPosInt, DataPosFrac;
-    ALboolean Looping;
-    ALint increment;
-    ALenum State;
-    ALsizei OutPos;
-    ALsizei NumChannels;
-    ALsizei SampleSize;
+    ALsizei NumChannels, SampleSize;
+    ResamplerFunc Resample;
+    ALsizei DataPosInt;
+    ALuint DataPosFrac;
     ALint64 DataSize64;
+    ALint increment;
     ALsizei Counter;
+    ALsizei OutPos;
     ALsizei IrSize;
-    ALsizei chan, j;
+    bool isplaying;
+    bool islooping;
+    ALsizei chan;
     ALsizei send;
 
     /* Get source info */
-    State          = AL_PLAYING; /* Only called while playing. */
-    DataPosInt     = ATOMIC_LOAD(&voice->position, almemory_order_acquire);
+    isplaying      = true; /* Will only be called while playing. */
+    islooping      = ATOMIC_LOAD(&Source->looping, almemory_order_acquire);
+    DataPosInt     = ATOMIC_LOAD(&voice->position, almemory_order_relaxed);
     DataPosFrac    = ATOMIC_LOAD(&voice->position_fraction, almemory_order_relaxed);
     BufferListItem = ATOMIC_LOAD(&voice->current_buffer, almemory_order_relaxed);
-    Looping        = ATOMIC_LOAD(&Source->looping, almemory_order_relaxed);
     NumChannels    = voice->NumChannels;
     SampleSize     = voice->SampleSize;
     increment      = voice->Step;
 
-    IrSize = (Device->Hrtf.Handle ? Device->Hrtf.Handle->irSize : 0);
+    IrSize = (Device->HrtfHandle ? Device->HrtfHandle->irSize : 0);
 
     Resample = ((increment == FRACTIONONE && DataPosFrac == 0) ?
                 Resample_copy32_C : ResampleSamples);
 
-    Counter = voice->Moving ? SamplesToDo : 0;
+    Counter = (voice->Flags&VOICE_IS_MOVING) ? SamplesToDo : 0;
     OutPos = 0;
     do {
         ALsizei SrcBufferSize, DstBufferSize;
@@ -446,9 +446,9 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                 Data += chan*SampleSize;
 
                 /* If current pos is beyond the loop range, do not loop */
-                if(Looping == AL_FALSE || DataPosInt >= (ALuint)ALBuffer->LoopEnd)
+                if(!islooping || DataPosInt >= ALBuffer->LoopEnd)
                 {
-                    Looping = AL_FALSE;
+                    islooping = false;
 
                     /* Load what's left to play from the source buffer, and
                      * clear the rest of the temp buffer */
@@ -490,7 +490,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
             {
                 /* Crawl the buffer queue to fill in the temp buffer */
                 ALbufferlistitem *tmpiter = BufferListItem;
-                ALuint pos = DataPosInt;
+                ALsizei pos = DataPosInt;
 
                 while(tmpiter && SrcBufferSize > SrcDataSize)
                 {
@@ -498,7 +498,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                     if((ALBuffer=tmpiter->buffer) != NULL)
                     {
                         const ALubyte *Data = ALBuffer->data;
-                        ALuint DataSize = ALBuffer->SampleLen;
+                        ALsizei DataSize = ALBuffer->SampleLen;
 
                         /* Skip the data already played */
                         if(DataSize <= pos)
@@ -516,7 +516,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                         }
                     }
                     tmpiter = tmpiter->next;
-                    if(!tmpiter && Looping)
+                    if(!tmpiter && islooping)
                         tmpiter = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
                     else if(!tmpiter)
                     {
@@ -545,61 +545,114 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                     &parms->LowPass, &parms->HighPass, Device->FilteredData,
                     ResampledData, DstBufferSize, parms->FilterType
                 );
-                if(!voice->IsHrtf)
+                if(!(voice->Flags&VOICE_IS_HRTF))
                 {
                     if(!Counter)
                         memcpy(parms->Gains.Current, parms->Gains.Target,
                                sizeof(parms->Gains.Current));
-                    MixSamples(samples, voice->Direct.Channels, voice->Direct.Buffer,
-                        parms->Gains.Current, parms->Gains.Target, Counter, OutPos,
-                        DstBufferSize
-                    );
+                    if(!(voice->Flags&VOICE_HAS_NFC))
+                        MixSamples(samples, voice->Direct.Channels, voice->Direct.Buffer,
+                            parms->Gains.Current, parms->Gains.Target, Counter, OutPos,
+                            DstBufferSize
+                        );
+                    else
+                    {
+                        static void (*const NfcUpdate[MAX_AMBI_ORDER])(
+                            NfcFilter*,float*,const float*,const int
+                        ) = {
+                            NfcFilterUpdate1, NfcFilterUpdate2, NfcFilterUpdate3
+                        };
+                        ALfloat *nfcsamples = Device->NFCtrlData;
+                        ALsizei ord, chanoffset = 0;
+
+                        MixSamples(samples,
+                            voice->Direct.ChannelsPerOrder[0], voice->Direct.Buffer,
+                            parms->Gains.Current, parms->Gains.Target, Counter, OutPos,
+                            DstBufferSize
+                        );
+                        chanoffset += voice->Direct.ChannelsPerOrder[0];
+                        for(ord = 1;ord < MAX_AMBI_ORDER+1;ord++)
+                        {
+                            if(voice->Direct.ChannelsPerOrder[ord] <= 0)
+                                break;
+                            NfcUpdate[ord-1](&parms->NFCtrlFilter[ord-1], nfcsamples, samples,
+                                             DstBufferSize);
+                            MixSamples(nfcsamples, voice->Direct.ChannelsPerOrder[ord],
+                                voice->Direct.Buffer+chanoffset, parms->Gains.Current+chanoffset,
+                                parms->Gains.Target+chanoffset, Counter, OutPos, DstBufferSize
+                            );
+                            chanoffset += voice->Direct.ChannelsPerOrder[ord];
+                        }
+                    }
                 }
                 else
                 {
                     MixHrtfParams hrtfparams;
                     int lidx, ridx;
 
-                    if(!Counter)
-                    {
-                        parms->Hrtf.Current = parms->Hrtf.Target;
-                        for(j = 0;j < HRIR_LENGTH;j++)
-                        {
-                            hrtfparams.Steps.Coeffs[j][0] = 0.0f;
-                            hrtfparams.Steps.Coeffs[j][1] = 0.0f;
-                        }
-                        hrtfparams.Steps.Delay[0] = 0;
-                        hrtfparams.Steps.Delay[1] = 0;
-                    }
-                    else
-                    {
-                        ALfloat delta = 1.0f / (ALfloat)Counter;
-                        ALfloat coeffdiff;
-                        ALint delaydiff;
-                        for(j = 0;j < IrSize;j++)
-                        {
-                            coeffdiff = parms->Hrtf.Target.Coeffs[j][0] - parms->Hrtf.Current.Coeffs[j][0];
-                            hrtfparams.Steps.Coeffs[j][0] = coeffdiff * delta;
-                            coeffdiff = parms->Hrtf.Target.Coeffs[j][1] - parms->Hrtf.Current.Coeffs[j][1];
-                            hrtfparams.Steps.Coeffs[j][1] = coeffdiff * delta;
-                        }
-                        delaydiff = parms->Hrtf.Target.Delay[0] - parms->Hrtf.Current.Delay[0];
-                        hrtfparams.Steps.Delay[0] = fastf2i((ALfloat)delaydiff * delta);
-                        delaydiff = parms->Hrtf.Target.Delay[1] - parms->Hrtf.Current.Delay[1];
-                        hrtfparams.Steps.Delay[1] = fastf2i((ALfloat)delaydiff * delta);
-                    }
-                    hrtfparams.Target = &parms->Hrtf.Target;
-                    hrtfparams.Current = &parms->Hrtf.Current;
-
                     lidx = GetChannelIdxByName(Device->RealOut, FrontLeft);
                     ridx = GetChannelIdxByName(Device->RealOut, FrontRight);
                     assert(lidx != -1 && ridx != -1);
 
-                    MixHrtfSamples(
-                        voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
-                        samples, Counter, voice->Offset, OutPos, IrSize, &hrtfparams,
-                        &parms->Hrtf.State, DstBufferSize
-                    );
+                    if(!Counter)
+                    {
+                        parms->Hrtf.Old = parms->Hrtf.Target;
+                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Target.Coeffs);
+                        hrtfparams.Delay[0] = parms->Hrtf.Target.Delay[0];
+                        hrtfparams.Delay[1] = parms->Hrtf.Target.Delay[1];
+                        hrtfparams.Gain = parms->Hrtf.Target.Gain;
+                        hrtfparams.GainStep = 0.0f;
+                        MixHrtfSamples(
+                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
+                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
+                            &parms->Hrtf.State, DstBufferSize
+                        );
+                    }
+                    else
+                    {
+                        HrtfState backupstate = parms->Hrtf.State;
+                        ALfloat gain;
+
+                        /* The old coefficients need to fade to silence
+                         * completely since they'll be replaced after the mix.
+                         * So it needs to fade out over DstBufferSize instead
+                         * of Counter.
+                         */
+                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Old.Coeffs);
+                        hrtfparams.Delay[0] = parms->Hrtf.Old.Delay[0];
+                        hrtfparams.Delay[1] = parms->Hrtf.Old.Delay[1];
+                        hrtfparams.Gain = parms->Hrtf.Old.Gain;
+                        hrtfparams.GainStep = -hrtfparams.Gain /
+                                              (ALfloat)DstBufferSize;
+                        MixHrtfSamples(
+                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
+                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
+                            &backupstate, DstBufferSize
+                        );
+
+                        /* The new coefficients need to fade in completely
+                         * since they're replacing the old ones. To keep the
+                         * source gain fading consistent, interpolate between
+                         * the old and new target gain given how much of the
+                         * fade time this mix handles.
+                         */
+                        gain = lerp(parms->Hrtf.Old.Gain, parms->Hrtf.Target.Gain,
+                                    (ALfloat)DstBufferSize/Counter);
+                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Target.Coeffs);
+                        hrtfparams.Delay[0] = parms->Hrtf.Target.Delay[0];
+                        hrtfparams.Delay[1] = parms->Hrtf.Target.Delay[1];
+                        hrtfparams.Gain = 0.0f;
+                        hrtfparams.GainStep = gain / (ALfloat)DstBufferSize;
+                        MixHrtfSamples(
+                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
+                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
+                            &parms->Hrtf.State, DstBufferSize
+                        );
+                        /* Update the old parameters with the result. */
+                        parms->Hrtf.Old = parms->Hrtf.Target;
+                        if(DstBufferSize < Counter)
+                            parms->Hrtf.Old.Gain = hrtfparams.Gain;
+                    }
                 }
             }
 
@@ -646,27 +699,27 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                 DataSize = ALBuffer->SampleLen;
                 LoopStart = ALBuffer->LoopStart;
                 LoopEnd = ALBuffer->LoopEnd;
-                if((ALuint)LoopEnd > DataPosInt)
+                if(LoopEnd > DataPosInt)
                     break;
             }
 
-            if(Looping && Source->SourceType == AL_STATIC)
+            if(islooping && Source->SourceType == AL_STATIC)
             {
                 assert(LoopEnd > LoopStart);
                 DataPosInt = ((DataPosInt-LoopStart)%(LoopEnd-LoopStart)) + LoopStart;
                 break;
             }
 
-            if((ALuint)DataSize > DataPosInt)
+            if(DataSize > DataPosInt)
                 break;
 
             if(!(BufferListItem=BufferListItem->next))
             {
-                if(Looping)
+                if(islooping)
                     BufferListItem = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
                 else
                 {
-                    State = AL_STOPPED;
+                    isplaying = false;
                     BufferListItem = NULL;
                     DataPosInt = 0;
                     DataPosFrac = 0;
@@ -676,13 +729,13 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
 
             DataPosInt -= DataSize;
         }
-    } while(State == AL_PLAYING && OutPos < SamplesToDo);
+    } while(isplaying && OutPos < SamplesToDo);
 
-    voice->Moving = AL_TRUE;
+    voice->Flags |= VOICE_IS_MOVING;
 
     /* Update source info */
     ATOMIC_STORE(&voice->position,          DataPosInt, almemory_order_relaxed);
     ATOMIC_STORE(&voice->position_fraction, DataPosFrac, almemory_order_relaxed);
     ATOMIC_STORE(&voice->current_buffer,    BufferListItem, almemory_order_release);
-    return State == AL_PLAYING;
+    return isplaying;
 }
