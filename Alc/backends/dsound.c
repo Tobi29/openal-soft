@@ -145,16 +145,16 @@ static BOOL CALLBACK DSoundEnumDevices(GUID *guid, const WCHAR *desc, const WCHA
     {
         const DevMap *iter;
 
-        al_string_copy_cstr(&entry.name, DEVNAME_HEAD);
-        al_string_append_wcstr(&entry.name, desc);
+        alstr_copy_cstr(&entry.name, DEVNAME_HEAD);
+        alstr_append_wcstr(&entry.name, desc);
         if(count != 0)
         {
             char str[64];
             snprintf(str, sizeof(str), " #%d", count+1);
-            al_string_append_cstr(&entry.name, str);
+            alstr_append_cstr(&entry.name, str);
         }
 
-#define MATCH_ENTRY(i) (al_string_cmp(entry.name, (i)->name) == 0)
+#define MATCH_ENTRY(i) (alstr_cmp(entry.name, (i)->name) == 0)
         VECTOR_FIND_IF(iter, const DevMap, *devices, MATCH_ENTRY);
         if(iter == VECTOR_END(*devices)) break;
 #undef MATCH_ENTRY
@@ -165,7 +165,7 @@ static BOOL CALLBACK DSoundEnumDevices(GUID *guid, const WCHAR *desc, const WCHA
     hr = StringFromCLSID(guid, &guidstr);
     if(SUCCEEDED(hr))
     {
-        TRACE("Got device \"%s\", GUID \"%ls\"\n", al_string_get_cstr(entry.name), guidstr);
+        TRACE("Got device \"%s\", GUID \"%ls\"\n", alstr_get_cstr(entry.name), guidstr);
         CoTaskMemFree(guidstr);
     }
 
@@ -244,7 +244,7 @@ FORCE_ALIGN static int ALCdsoundPlayback_mixerProc(void *ptr)
         return 1;
     }
 
-    FrameSize = FrameSizeFromDevFmt(device->FmtChans, device->FmtType);
+    FrameSize = FrameSizeFromDevFmt(device->FmtChans, device->FmtType, device->AmbiOrder);
     FragSize = device->UpdateSize * FrameSize;
 
     IDirectSoundBuffer_GetCurrentPosition(self->Buffer, &LastCursor, NULL);
@@ -343,14 +343,14 @@ static ALCenum ALCdsoundPlayback_open(ALCdsoundPlayback *self, const ALCchar *de
 
     if(!deviceName && VECTOR_SIZE(PlaybackDevices) > 0)
     {
-        deviceName = al_string_get_cstr(VECTOR_FRONT(PlaybackDevices).name);
+        deviceName = alstr_get_cstr(VECTOR_FRONT(PlaybackDevices).name);
         guid = &VECTOR_FRONT(PlaybackDevices).guid;
     }
     else
     {
         const DevMap *iter;
 
-#define MATCH_NAME(i)  (al_string_cmp_cstr((i)->name, deviceName) == 0)
+#define MATCH_NAME(i)  (alstr_cmp_cstr((i)->name, deviceName) == 0)
         VECTOR_FIND_IF(iter, const DevMap, PlaybackDevices, MATCH_NAME);
 #undef MATCH_NAME
         if(iter == VECTOR_END(PlaybackDevices))
@@ -381,7 +381,7 @@ static ALCenum ALCdsoundPlayback_open(ALCdsoundPlayback *self, const ALCchar *de
         return ALC_INVALID_VALUE;
     }
 
-    al_string_copy_cstr(&device->DeviceName, deviceName);
+    alstr_copy_cstr(&device->DeviceName, deviceName);
 
     return ALC_NO_ERROR;
 }
@@ -474,9 +474,7 @@ static ALCboolean ALCdsoundPlayback_reset(ALCdsoundPlayback *self)
             case DevFmtMono:
                 OutputType.dwChannelMask = SPEAKER_FRONT_CENTER;
                 break;
-            case DevFmtAmbi1:
-            case DevFmtAmbi2:
-            case DevFmtAmbi3:
+            case DevFmtAmbi3D:
                 device->FmtChans = DevFmtStereo;
                 /*fall-through*/
             case DevFmtStereo:
@@ -529,7 +527,7 @@ static ALCboolean ALCdsoundPlayback_reset(ALCdsoundPlayback *self)
 retry_open:
         hr = S_OK;
         OutputType.Format.wFormatTag = WAVE_FORMAT_PCM;
-        OutputType.Format.nChannels = ChannelsFromDevFmt(device->FmtChans);
+        OutputType.Format.nChannels = ChannelsFromDevFmt(device->FmtChans, device->AmbiOrder);
         OutputType.Format.wBitsPerSample = BytesFromDevFmt(device->FmtType) * 8;
         OutputType.Format.nBlockAlign = OutputType.Format.nChannels*OutputType.Format.wBitsPerSample/8;
         OutputType.Format.nSamplesPerSec = device->Frequency;
@@ -706,14 +704,14 @@ static ALCenum ALCdsoundCapture_open(ALCdsoundCapture *self, const ALCchar *devi
 
     if(!deviceName && VECTOR_SIZE(CaptureDevices) > 0)
     {
-        deviceName = al_string_get_cstr(VECTOR_FRONT(CaptureDevices).name);
+        deviceName = alstr_get_cstr(VECTOR_FRONT(CaptureDevices).name);
         guid = &VECTOR_FRONT(CaptureDevices).guid;
     }
     else
     {
         const DevMap *iter;
 
-#define MATCH_NAME(i)  (al_string_cmp_cstr((i)->name, deviceName) == 0)
+#define MATCH_NAME(i)  (alstr_cmp_cstr((i)->name, deviceName) == 0)
         VECTOR_FIND_IF(iter, const DevMap, CaptureDevices, MATCH_NAME);
 #undef MATCH_NAME
         if(iter == VECTOR_END(CaptureDevices))
@@ -736,98 +734,94 @@ static ALCenum ALCdsoundCapture_open(ALCdsoundCapture *self, const ALCchar *devi
             break;
     }
 
+    memset(&InputType, 0, sizeof(InputType));
+    switch(device->FmtChans)
+    {
+        case DevFmtMono:
+            InputType.dwChannelMask = SPEAKER_FRONT_CENTER;
+            break;
+        case DevFmtStereo:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT;
+            break;
+        case DevFmtQuad:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT |
+                                      SPEAKER_BACK_LEFT |
+                                      SPEAKER_BACK_RIGHT;
+            break;
+        case DevFmtX51:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT |
+                                      SPEAKER_FRONT_CENTER |
+                                      SPEAKER_LOW_FREQUENCY |
+                                      SPEAKER_SIDE_LEFT |
+                                      SPEAKER_SIDE_RIGHT;
+            break;
+        case DevFmtX51Rear:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT |
+                                      SPEAKER_FRONT_CENTER |
+                                      SPEAKER_LOW_FREQUENCY |
+                                      SPEAKER_BACK_LEFT |
+                                      SPEAKER_BACK_RIGHT;
+            break;
+        case DevFmtX61:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT |
+                                      SPEAKER_FRONT_CENTER |
+                                      SPEAKER_LOW_FREQUENCY |
+                                      SPEAKER_BACK_CENTER |
+                                      SPEAKER_SIDE_LEFT |
+                                      SPEAKER_SIDE_RIGHT;
+            break;
+        case DevFmtX71:
+            InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
+                                      SPEAKER_FRONT_RIGHT |
+                                      SPEAKER_FRONT_CENTER |
+                                      SPEAKER_LOW_FREQUENCY |
+                                      SPEAKER_BACK_LEFT |
+                                      SPEAKER_BACK_RIGHT |
+                                      SPEAKER_SIDE_LEFT |
+                                      SPEAKER_SIDE_RIGHT;
+            break;
+        case DevFmtAmbi3D:
+            WARN("%s capture not supported\n", DevFmtChannelsString(device->FmtChans));
+            return ALC_INVALID_ENUM;
+    }
+
+    InputType.Format.wFormatTag = WAVE_FORMAT_PCM;
+    InputType.Format.nChannels = ChannelsFromDevFmt(device->FmtChans, device->AmbiOrder);
+    InputType.Format.wBitsPerSample = BytesFromDevFmt(device->FmtType) * 8;
+    InputType.Format.nBlockAlign = InputType.Format.nChannels*InputType.Format.wBitsPerSample/8;
+    InputType.Format.nSamplesPerSec = device->Frequency;
+    InputType.Format.nAvgBytesPerSec = InputType.Format.nSamplesPerSec*InputType.Format.nBlockAlign;
+    InputType.Format.cbSize = 0;
+    InputType.Samples.wValidBitsPerSample = InputType.Format.wBitsPerSample;
+    if(device->FmtType == DevFmtFloat)
+        InputType.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+    else
+        InputType.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+
+    if(InputType.Format.nChannels > 2 || device->FmtType == DevFmtFloat)
+    {
+        InputType.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+        InputType.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
+    }
+
+    samples = device->UpdateSize * device->NumUpdates;
+    samples = maxu(samples, 100 * device->Frequency / 1000);
+
+    memset(&DSCBDescription, 0, sizeof(DSCBUFFERDESC));
+    DSCBDescription.dwSize = sizeof(DSCBUFFERDESC);
+    DSCBDescription.dwFlags = 0;
+    DSCBDescription.dwBufferBytes = samples * InputType.Format.nBlockAlign;
+    DSCBDescription.lpwfxFormat = &InputType.Format;
+
     //DirectSoundCapture Init code
     hr = DirectSoundCaptureCreate(guid, &self->DSC, NULL);
     if(SUCCEEDED(hr))
-    {
-        memset(&InputType, 0, sizeof(InputType));
-
-        switch(device->FmtChans)
-        {
-            case DevFmtMono:
-                InputType.dwChannelMask = SPEAKER_FRONT_CENTER;
-                break;
-            case DevFmtStereo:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT;
-                break;
-            case DevFmtQuad:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT |
-                                          SPEAKER_BACK_LEFT |
-                                          SPEAKER_BACK_RIGHT;
-                break;
-            case DevFmtX51:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT |
-                                          SPEAKER_FRONT_CENTER |
-                                          SPEAKER_LOW_FREQUENCY |
-                                          SPEAKER_SIDE_LEFT |
-                                          SPEAKER_SIDE_RIGHT;
-                break;
-            case DevFmtX51Rear:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT |
-                                          SPEAKER_FRONT_CENTER |
-                                          SPEAKER_LOW_FREQUENCY |
-                                          SPEAKER_BACK_LEFT |
-                                          SPEAKER_BACK_RIGHT;
-                break;
-            case DevFmtX61:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT |
-                                          SPEAKER_FRONT_CENTER |
-                                          SPEAKER_LOW_FREQUENCY |
-                                          SPEAKER_BACK_CENTER |
-                                          SPEAKER_SIDE_LEFT |
-                                          SPEAKER_SIDE_RIGHT;
-                break;
-            case DevFmtX71:
-                InputType.dwChannelMask = SPEAKER_FRONT_LEFT |
-                                          SPEAKER_FRONT_RIGHT |
-                                          SPEAKER_FRONT_CENTER |
-                                          SPEAKER_LOW_FREQUENCY |
-                                          SPEAKER_BACK_LEFT |
-                                          SPEAKER_BACK_RIGHT |
-                                          SPEAKER_SIDE_LEFT |
-                                          SPEAKER_SIDE_RIGHT;
-                break;
-            case DevFmtAmbi1:
-            case DevFmtAmbi2:
-            case DevFmtAmbi3:
-                break;
-        }
-
-        InputType.Format.wFormatTag = WAVE_FORMAT_PCM;
-        InputType.Format.nChannels = ChannelsFromDevFmt(device->FmtChans);
-        InputType.Format.wBitsPerSample = BytesFromDevFmt(device->FmtType) * 8;
-        InputType.Format.nBlockAlign = InputType.Format.nChannels*InputType.Format.wBitsPerSample/8;
-        InputType.Format.nSamplesPerSec = device->Frequency;
-        InputType.Format.nAvgBytesPerSec = InputType.Format.nSamplesPerSec*InputType.Format.nBlockAlign;
-        InputType.Format.cbSize = 0;
-
-        if(InputType.Format.nChannels > 2 || device->FmtType == DevFmtFloat)
-        {
-            InputType.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-            InputType.Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
-            InputType.Samples.wValidBitsPerSample = InputType.Format.wBitsPerSample;
-            if(device->FmtType == DevFmtFloat)
-                InputType.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
-            else
-                InputType.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-        }
-
-        samples = device->UpdateSize * device->NumUpdates;
-        samples = maxu(samples, 100 * device->Frequency / 1000);
-
-        memset(&DSCBDescription, 0, sizeof(DSCBUFFERDESC));
-        DSCBDescription.dwSize = sizeof(DSCBUFFERDESC);
-        DSCBDescription.dwFlags = 0;
-        DSCBDescription.dwBufferBytes = samples * InputType.Format.nBlockAlign;
-        DSCBDescription.lpwfxFormat = &InputType.Format;
-
         hr = IDirectSoundCapture_CreateCaptureBuffer(self->DSC, &DSCBDescription, &self->DSCbuffer, NULL);
-    }
     if(SUCCEEDED(hr))
     {
          self->Ring = ll_ringbuffer_create(device->UpdateSize*device->NumUpdates + 1,
@@ -855,7 +849,7 @@ static ALCenum ALCdsoundCapture_open(ALCdsoundCapture *self, const ALCchar *devi
     self->BufferBytes = DSCBDescription.dwBufferBytes;
     SetDefaultWFXChannelOrder(device);
 
-    al_string_copy_cstr(&device->DeviceName, deviceName);
+    alstr_copy_cstr(&device->DeviceName, deviceName);
 
     return ALC_NO_ERROR;
 }
@@ -921,7 +915,7 @@ static ALCuint ALCdsoundCapture_availableSamples(ALCdsoundCapture *self)
     if(!device->Connected)
         goto done;
 
-    FrameSize = FrameSizeFromDevFmt(device->FmtChans, device->FmtType);
+    FrameSize = FrameSizeFromDevFmt(device->FmtChans, device->FmtType, device->AmbiOrder);
     BufferBytes = self->BufferBytes;
     LastCursor = self->Cursor;
 
@@ -958,9 +952,9 @@ done:
 
 
 static inline void AppendAllDevicesList2(const DevMap *entry)
-{ AppendAllDevicesList(al_string_get_cstr(entry->name)); }
+{ AppendAllDevicesList(alstr_get_cstr(entry->name)); }
 static inline void AppendCaptureDeviceList2(const DevMap *entry)
-{ AppendCaptureDeviceList(al_string_get_cstr(entry->name)); }
+{ AppendCaptureDeviceList(alstr_get_cstr(entry->name)); }
 
 typedef struct ALCdsoundBackendFactory {
     DERIVE_FROM_TYPE(ALCbackendFactory);

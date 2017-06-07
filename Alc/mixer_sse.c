@@ -13,7 +13,7 @@
 
 
 const ALfloat *Resample_bsinc32_SSE(const InterpState *state, const ALfloat *restrict src,
-                                    ALuint frac, ALint increment, ALfloat *restrict dst,
+                                    ALsizei frac, ALint increment, ALfloat *restrict dst,
                                     ALsizei dstlen)
 {
     const __m128 sf4 = _mm_set1_ps(state->bsinc.sf);
@@ -124,6 +124,7 @@ static inline void ApplyCoeffs(ALsizei Offset, ALfloat (*restrict Values)[2],
 }
 
 #define MixHrtf MixHrtf_SSE
+#define MixHrtfBlend MixHrtfBlend_SSE
 #define MixDirectHrtf MixDirectHrtf_SSE
 #include "mixer_inc.c"
 #undef MixHrtf

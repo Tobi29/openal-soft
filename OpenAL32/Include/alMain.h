@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <assert.h>
 #include <math.h>
@@ -42,9 +43,9 @@
 #define ALC_FUMA_SOFT                            0x1601
 
 /* Ambisonic scalings (normalization) */
-#define ALC_N3D_SOFT                             0x1700
-#define ALC_SN3D_SOFT                            0x1701
 /*#define ALC_FUMA_SOFT*/
+#define ALC_SN3D_SOFT                            0x1602
+#define ALC_N3D_SOFT                             0x1603
 
 typedef ALCboolean (ALC_APIENTRY*LPALCISAMBISONICFORMATSUPPORTEDSOFT)(ALCdevice *device, ALCenum layout, ALCenum scaling, ALsizei order);
 #ifdef AL_ALEXT_PROTOTYPES
@@ -190,6 +191,20 @@ AL_API ALboolean AL_APIENTRY alIsBufferFormatSupportedSOFT(ALenum format);
 #endif
 
 
+#ifdef __GNUC__
+/* This helps cast away the const-ness of a pointer without accidentally
+ * changing the pointer type. This is necessary due to Clang's inability to use
+ * atomic_load on a const _Atomic variable.
+ */
+#define CONST_CAST(T, V) __extension__({                                      \
+    const T _tmp = (V);                                                       \
+    (T)_tmp;                                                                  \
+})
+#else
+#define CONST_CAST(T, V) ((T)(V))
+#endif
+
+
 typedef ALint64SOFT ALint64;
 typedef ALuint64SOFT ALuint64;
 
@@ -225,6 +240,12 @@ typedef ALuint64SOFT ALuint64;
 #define DECL_FORMAT(x, y, z)
 #endif
 
+/* Calculates the size of a struct with N elements of a flexible array member.
+ * GCC and Clang allow offsetof(Type, fam[N]) for this, but MSVC seems to have
+ * trouble, so a bit more verbose workaround is needed.
+ */
+#define FAM_SIZE(T, M, N)  (offsetof(T, M) + sizeof(((T*)NULL)->M[0])*(N))
+
 #if defined(__GNUC__) && defined(__i386__)
 /* force_align_arg_pointer is required for proper function arguments aligning
  * when SSE code is used. Some systems (Windows, QNX) do not guarantee our
@@ -256,7 +277,7 @@ static const union {
 } EndianTest = { 1 };
 #define IS_LITTLE_ENDIAN (EndianTest.b[0] == 1)
 
-#define COUNTOF(x) (sizeof((x))/sizeof((x)[0]))
+#define COUNTOF(x) (sizeof(x) / sizeof(0[x]))
 
 
 #define DERIVE_FROM_TYPE(t)          t t##_parent
@@ -358,6 +379,8 @@ extern "C" {
 #endif
 
 struct Hrtf;
+struct HrtfEntry;
+struct Compressor;
 
 
 #define DEFAULT_OUTPUT_RATE  (44100)
@@ -428,9 +451,6 @@ typedef struct {
     ALCuint (*AvailableSamples)(ALCdevice*);
 } BackendFuncs;
 
-ALCboolean alc_ca_init(BackendFuncs *func_list);
-void alc_ca_deinit(void);
-void alc_ca_probe(enum DevProbe type);
 ALCboolean alc_qsa_init(BackendFuncs *func_list);
 void alc_qsa_deinit(void);
 void alc_qsa_probe(enum DevProbe type);
@@ -510,24 +530,20 @@ enum DevFmtChannels {
     DevFmtX51    = ALC_5POINT1_SOFT,
     DevFmtX61    = ALC_6POINT1_SOFT,
     DevFmtX71    = ALC_7POINT1_SOFT,
+    DevFmtAmbi3D = ALC_BFORMAT3D_SOFT,
 
     /* Similar to 5.1, except using rear channels instead of sides */
     DevFmtX51Rear = 0x80000000,
-
-    /* Ambisonic formats should be kept together */
-    DevFmtAmbi1,
-    DevFmtAmbi2,
-    DevFmtAmbi3,
 
     DevFmtChannelsDefault = DevFmtStereo
 };
 #define MAX_OUTPUT_CHANNELS  (16)
 
 ALsizei BytesFromDevFmt(enum DevFmtType type);
-ALsizei ChannelsFromDevFmt(enum DevFmtChannels chans);
-inline ALsizei FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type)
+ALsizei ChannelsFromDevFmt(enum DevFmtChannels chans, ALsizei ambiorder);
+inline ALsizei FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type, ALsizei ambiorder)
 {
-    return ChannelsFromDevFmt(chans) * BytesFromDevFmt(type);
+    return ChannelsFromDevFmt(chans, ambiorder) * BytesFromDevFmt(type);
 }
 
 enum AmbiLayout {
@@ -633,12 +649,12 @@ typedef struct DirectHrtfState {
     } Chan[];
 } DirectHrtfState;
 
-typedef struct HrtfEntry {
+typedef struct EnumeratedHrtf {
     al_string name;
 
-    const struct Hrtf *hrtf;
-} HrtfEntry;
-TYPEDEF_VECTOR(HrtfEntry, vector_HrtfEntry)
+    struct HrtfEntry *hrtf;
+} EnumeratedHrtf;
+TYPEDEF_VECTOR(EnumeratedHrtf, vector_EnumeratedHrtf)
 
 
 /* Maximum delay in samples for speaker distance compensation. */
@@ -670,6 +686,7 @@ struct ALCdevice_struct
     enum DevFmtChannels FmtChans;
     enum DevFmtType     FmtType;
     ALboolean IsHeadphones;
+    ALsizei AmbiOrder;
     /* For DevFmtAmbi* output only, specifies the channel order and
      * normalization.
      */
@@ -701,8 +718,8 @@ struct ALCdevice_struct
     /* HRTF state and info */
     DirectHrtfState *Hrtf;
     al_string HrtfName;
-    const struct Hrtf *HrtfHandle;
-    vector_HrtfEntry HrtfList;
+    struct Hrtf *HrtfHandle;
+    vector_EnumeratedHrtf HrtfList;
     ALCenum HrtfStatus;
 
     /* UHJ encoder state */
@@ -766,6 +783,8 @@ struct ALCdevice_struct
         ALsizei NumChannels;
     } RealOut;
 
+    struct Compressor *Limiter;
+
     /* The average speaker distance as determined by the ambdec configuration
      * (or alternatively, by the NFC-HOA reference delay). Only used for NFC.
      */
@@ -773,6 +792,10 @@ struct ALCdevice_struct
 
     /* Delay buffers used to compensate for speaker distances. */
     DistanceComp ChannelDelay[MAX_OUTPUT_CHANNELS];
+
+    /* Dithering control. */
+    bool DitherEnabled;
+    ALuint DitherSeed;
 
     /* Running count of the mixer invocations, in 31.1 fixed point. This
      * actually increments *twice* when mixing, first at the start and then at
@@ -855,7 +878,7 @@ struct ALCcontext_struct {
     ALsizei VoiceCount;
     ALsizei MaxVoices;
 
-    ATOMIC(struct ALeffectslot*) ActiveAuxSlotList;
+    ATOMIC(struct ALeffectslotArray*) ActiveAuxSlots;
 
     ALCdevice  *Device;
     const ALCchar *ExtensionList;
@@ -1023,6 +1046,34 @@ vector_al_string SearchDataFiles(const char *match, const char *subdir);
  */
 typedef ALfloat ALfloatBUFFERSIZE[BUFFERSIZE];
 typedef ALfloat ALfloat2[2];
+
+
+/* The compressor requires the following information for proper
+ * initialization:
+ *
+ *   PreGainDb      - Gain applied before detection (in dB).
+ *   PostGainDb     - Gain applied after compression (in dB).
+ *   SummedLink     - Whether to use summed (true) or maxed (false) linking.
+ *   RmsSensing     - Whether to use RMS (true) or Peak (false) sensing.
+ *   AttackTimeMin  - Minimum attack time (in seconds).
+ *   AttackTimeMax  - Maximum attack time.  Automates when min != max.
+ *   ReleaseTimeMin - Minimum release time (in seconds).
+ *   ReleaseTimeMax - Maximum release time.  Automates when min != max.
+ *   Ratio          - Compression ratio (x:1).  Set to 0 for true limiter.
+ *   ThresholdDb    - Triggering threshold (in dB).
+ *   KneeDb         - Knee width (below threshold; in dB).
+ *   SampleRate     - Sample rate to process.
+ */
+struct Compressor *CompressorInit(const ALfloat PreGainDb, const ALfloat PostGainDb,
+    const ALboolean SummedLink, const ALboolean RmsSensing, const ALfloat AttackTimeMin,
+    const ALfloat AttackTimeMax, const ALfloat ReleaseTimeMin, const ALfloat ReleaseTimeMax,
+    const ALfloat Ratio, const ALfloat ThresholdDb, const ALfloat KneeDb,
+    const ALuint SampleRate);
+
+ALuint GetCompressorSampleRate(const struct Compressor *Comp);
+
+void ApplyCompression(struct Compressor *Comp, const ALsizei NumChans, const ALsizei SamplesToDo,
+                      ALfloat (*restrict OutBuffer)[BUFFERSIZE]);
 
 #ifdef __cplusplus
 }

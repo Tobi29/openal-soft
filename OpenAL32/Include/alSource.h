@@ -5,6 +5,7 @@
 #include "alMain.h"
 #include "alu.h"
 #include "hrtf.h"
+#include "atomic.h"
 
 #define MAX_SENDS      16
 #define DEFAULT_SENDS  2
@@ -15,66 +16,12 @@ extern "C" {
 
 struct ALbuffer;
 struct ALsource;
-struct ALsourceProps;
 
 
 typedef struct ALbufferlistitem {
     struct ALbuffer *buffer;
-    struct ALbufferlistitem *volatile next;
+    ATOMIC(struct ALbufferlistitem*) next;
 } ALbufferlistitem;
-
-
-struct ALsourceProps {
-    ATOMIC(struct ALsourceProps*) next;
-
-    ALfloat Pitch;
-    ALfloat Gain;
-    ALfloat OuterGain;
-    ALfloat MinGain;
-    ALfloat MaxGain;
-    ALfloat InnerAngle;
-    ALfloat OuterAngle;
-    ALfloat RefDistance;
-    ALfloat MaxDistance;
-    ALfloat RollOffFactor;
-    ALfloat Position[3];
-    ALfloat Velocity[3];
-    ALfloat Direction[3];
-    ALfloat Orientation[2][3];
-    ALboolean HeadRelative;
-    enum DistanceModel DistanceModel;
-    ALboolean DirectChannels;
-
-    ALboolean DryGainHFAuto;
-    ALboolean WetGainAuto;
-    ALboolean WetGainHFAuto;
-    ALfloat   OuterGainHF;
-
-    ALfloat AirAbsorptionFactor;
-    ALfloat RoomRolloffFactor;
-    ALfloat DopplerFactor;
-
-    ALfloat StereoPan[2];
-
-    ALfloat Radius;
-
-    /** Direct filter and auxiliary send info. */
-    struct {
-        ALfloat Gain;
-        ALfloat GainHF;
-        ALfloat HFReference;
-        ALfloat GainLF;
-        ALfloat LFReference;
-    } Direct;
-    struct {
-        struct ALeffectslot *Slot;
-        ALfloat Gain;
-        ALfloat GainHF;
-        ALfloat HFReference;
-        ALfloat GainLF;
-        ALfloat LFReference;
-    } Send[];
-};
 
 
 typedef struct ALsource {
@@ -88,14 +35,17 @@ typedef struct ALsource {
     ALfloat   OuterAngle;
     ALfloat   RefDistance;
     ALfloat   MaxDistance;
-    ALfloat   RollOffFactor;
+    ALfloat   RolloffFactor;
     ALfloat   Position[3];
     ALfloat   Velocity[3];
     ALfloat   Direction[3];
     ALfloat   Orientation[2][3];
     ALboolean HeadRelative;
+    ALboolean Looping;
     enum DistanceModel DistanceModel;
+    enum Resampler Resampler;
     ALboolean DirectChannels;
+    enum SpatializeMode Spatialize;
 
     ALboolean DryGainHFAuto;
     ALboolean WetGainAuto;
@@ -145,14 +95,9 @@ typedef struct ALsource {
 
     /** Source Buffer Queue head. */
     RWLock queue_lock;
-    ATOMIC(ALbufferlistitem*) queue;
-
-    ATOMIC(ALboolean) looping;
+    ALbufferlistitem *queue;
 
     ATOMIC_FLAG PropsClean;
-
-    ATOMIC(struct ALsourceProps*) Update;
-    ATOMIC(struct ALsourceProps*) FreeList;
 
     /** Self ID */
     ALuint id;

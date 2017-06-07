@@ -5,6 +5,7 @@
  */
 
 #include <condition_variable>
+#include <functional>
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
@@ -1193,7 +1194,7 @@ void MovieState::setTitle(SDL_Window *window)
     auto fpos = ((pos1 == std::string::npos) ? pos2 :
                  (pos2 == std::string::npos) ? pos1 :
                  std::max(pos1, pos2)) + 1;
-    SDL_SetWindowTitle(window, (AppName+" - "+mFilename.substr(fpos)).c_str());
+    SDL_SetWindowTitle(window, (mFilename.substr(fpos)+" - "+AppName).c_str());
 }
 
 double MovieState::getClock()

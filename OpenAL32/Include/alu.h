@@ -35,11 +35,29 @@ extern "C" {
 #endif
 
 struct ALsource;
-struct ALsourceProps;
 struct ALbufferlistitem;
 struct ALvoice;
 struct ALeffectslot;
 
+
+#define DITHER_RNG_SEED 22222
+
+
+enum SpatializeMode {
+    SpatializeOff = AL_FALSE,
+    SpatializeOn = AL_TRUE,
+    SpatializeAuto = AL_AUTO_SOFT
+};
+
+enum Resampler {
+    PointResampler,
+    LinearResampler,
+    FIR4Resampler,
+    BSincResampler,
+
+    ResamplerMax = BSincResampler
+};
+extern enum Resampler ResamplerDefault;
 
 /* The number of distinct scale and phase intervals within the filter table. */
 #define BSINC_SCALE_BITS  4
@@ -66,6 +84,11 @@ typedef struct BsincState {
 typedef union InterpState {
     BsincState bsinc;
 } InterpState;
+
+typedef const ALfloat* (*ResamplerFunc)(const InterpState *state,
+    const ALfloat *restrict src, ALsizei frac, ALint increment,
+    ALfloat *restrict dst, ALsizei dstlen
+);
 
 
 typedef union aluVector {
@@ -124,7 +147,6 @@ typedef struct MixHrtfParams {
 
 
 typedef struct DirectParams {
-    enum ActiveFilters FilterType;
     ALfilterState LowPass;
     ALfilterState HighPass;
 
@@ -143,7 +165,6 @@ typedef struct DirectParams {
 } DirectParams;
 
 typedef struct SendParams {
-    enum ActiveFilters FilterType;
     ALfilterState LowPass;
     ALfilterState HighPass;
 
@@ -153,19 +174,74 @@ typedef struct SendParams {
     } Gains;
 } SendParams;
 
-/* If not 'moving', gain targets are used directly without fading. */
-#define VOICE_IS_MOVING (1<<0)
-#define VOICE_IS_HRTF   (1<<1)
+
+struct ALvoiceProps {
+    ATOMIC(struct ALvoiceProps*) next;
+
+    ALfloat Pitch;
+    ALfloat Gain;
+    ALfloat OuterGain;
+    ALfloat MinGain;
+    ALfloat MaxGain;
+    ALfloat InnerAngle;
+    ALfloat OuterAngle;
+    ALfloat RefDistance;
+    ALfloat MaxDistance;
+    ALfloat RolloffFactor;
+    ALfloat Position[3];
+    ALfloat Velocity[3];
+    ALfloat Direction[3];
+    ALfloat Orientation[2][3];
+    ALboolean HeadRelative;
+    enum DistanceModel DistanceModel;
+    enum Resampler Resampler;
+    ALboolean DirectChannels;
+    enum SpatializeMode SpatializeMode;
+
+    ALboolean DryGainHFAuto;
+    ALboolean WetGainAuto;
+    ALboolean WetGainHFAuto;
+    ALfloat   OuterGainHF;
+
+    ALfloat AirAbsorptionFactor;
+    ALfloat RoomRolloffFactor;
+    ALfloat DopplerFactor;
+
+    ALfloat StereoPan[2];
+
+    ALfloat Radius;
+
+    /** Direct filter and auxiliary send info. */
+    struct {
+        ALfloat Gain;
+        ALfloat GainHF;
+        ALfloat HFReference;
+        ALfloat GainLF;
+        ALfloat LFReference;
+    } Direct;
+    struct {
+        struct ALeffectslot *Slot;
+        ALfloat Gain;
+        ALfloat GainHF;
+        ALfloat HFReference;
+        ALfloat GainLF;
+        ALfloat LFReference;
+    } Send[];
+};
+
+/* If not 'fading', gain targets are used directly without fading. */
+#define VOICE_IS_FADING (1<<0)
+#define VOICE_HAS_HRTF  (1<<1)
 #define VOICE_HAS_NFC   (1<<2)
 
 typedef struct ALvoice {
-    struct ALsourceProps *Props;
+    struct ALvoiceProps *Props;
+
+    ATOMIC(struct ALvoiceProps*) Update;
+    ATOMIC(struct ALvoiceProps*) FreeList;
 
     ATOMIC(struct ALsource*) Source;
     ATOMIC(bool) Playing;
-
-    /* Current buffer queue item being played. */
-    ATOMIC(struct ALbufferlistitem*) current_buffer;
 
     /**
      * Source offset in samples, relative to the currently playing buffer, NOT
@@ -173,7 +249,15 @@ typedef struct ALvoice {
      * sample.
      */
     ATOMIC(ALuint) position;
-    ATOMIC(ALuint) position_fraction;
+    ATOMIC(ALsizei) position_fraction;
+
+    /* Current buffer queue item being played. */
+    ATOMIC(struct ALbufferlistitem*) current_buffer;
+
+    /* Buffer queue item to loop to at end of queue (will be NULL for non-
+     * looping voices).
+     */
+    ATOMIC(struct ALbufferlistitem*) loop_buffer;
 
     /**
      * Number of channels and bytes-per-sample for the attached source's
@@ -185,6 +269,8 @@ typedef struct ALvoice {
     /** Current target parameters used for mixing. */
     ALint Step;
 
+    ResamplerFunc Resampler;
+
     ALuint Flags;
 
     ALuint Offset; /* Number of output samples mixed since starting. */
@@ -194,6 +280,7 @@ typedef struct ALvoice {
     InterpState ResampleState;
 
     struct {
+        enum ActiveFilters FilterType;
         DirectParams Params[MAX_INPUT_CHANNELS];
 
         ALfloat (*Buffer)[BUFFERSIZE];
@@ -202,6 +289,7 @@ typedef struct ALvoice {
     } Direct;
 
     struct {
+        enum ActiveFilters FilterType;
         SendParams Params[MAX_INPUT_CHANNELS];
 
         ALfloat (*Buffer)[BUFFERSIZE];
@@ -209,11 +297,8 @@ typedef struct ALvoice {
     } Send[];
 } ALvoice;
 
+void DeinitVoice(ALvoice *voice);
 
-typedef const ALfloat* (*ResamplerFunc)(const InterpState *state,
-    const ALfloat *restrict src, ALuint frac, ALint increment,
-    ALfloat *restrict dst, ALsizei dstlen
-);
 
 typedef void (*MixerFunc)(const ALfloat *data, ALsizei OutChans,
                           ALfloat (*restrict OutBuffer)[BUFFERSIZE], ALfloat *CurrentGains,
@@ -226,6 +311,11 @@ typedef void (*HrtfMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict Right
                               const ALfloat *data, ALsizei Offset, ALsizei OutPos,
                               const ALsizei IrSize, MixHrtfParams *hrtfparams,
                               HrtfState *hrtfstate, ALsizei BufferSize);
+typedef void (*HrtfMixerBlendFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
+                                   const ALfloat *data, ALsizei Offset, ALsizei OutPos,
+                                   const ALsizei IrSize, const HrtfParams *oldparams,
+                                   MixHrtfParams *newparams, HrtfState *hrtfstate,
+                                   ALsizei BufferSize);
 typedef void (*HrtfDirectMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict RightOut,
                                     const ALfloat *data, ALsizei Offset, const ALsizei IrSize,
                                     const ALfloat (*restrict Coeffs)[2],
@@ -238,6 +328,9 @@ typedef void (*HrtfDirectMixerFunc)(ALfloat *restrict LeftOut, ALfloat *restrict
 
 #define SPEEDOFSOUNDMETRESPERSEC  (343.3f)
 #define AIRABSORBGAINHF           (0.99426f) /* -0.05dB */
+
+/* Target gain for the reverb decay feedback reaching the decay time. */
+#define REVERB_DECAY_GAIN  (0.001f) /* -60 dB */
 
 #define FRACTIONBITS (12)
 #define FRACTIONONE  (1<<FRACTIONBITS)
@@ -287,19 +380,18 @@ inline ALuint64 clampu64(ALuint64 val, ALuint64 min, ALuint64 max)
 { return minu64(max, maxu64(min, val)); }
 
 
-extern alignas(16) ALfloat ResampleCoeffs_FIR4[FRACTIONONE][4];
-
 extern alignas(16) const ALfloat bsincTab[18840];
+extern alignas(16) const ALfloat sinc4Tab[FRACTIONONE][4];
 
 
 inline ALfloat lerp(ALfloat val1, ALfloat val2, ALfloat mu)
 {
     return val1 + (val2-val1)*mu;
 }
-inline ALfloat resample_fir4(ALfloat val0, ALfloat val1, ALfloat val2, ALfloat val3, ALuint frac)
+inline ALfloat resample_fir4(ALfloat val0, ALfloat val1, ALfloat val2, ALfloat val3, ALsizei frac)
 {
-    const ALfloat *k = ResampleCoeffs_FIR4[frac];
-    return k[0]*val0 + k[1]*val1 + k[2]*val2 + k[3]*val3;
+    return sinc4Tab[frac][0]*val0 + sinc4Tab[frac][1]*val1 +
+           sinc4Tab[frac][2]*val2 + sinc4Tab[frac][3]*val3;
 }
 
 
@@ -309,11 +401,11 @@ enum HrtfRequestMode {
     Hrtf_Disable = 2,
 };
 
-
 void aluInitMixer(void);
 
 MixerFunc SelectMixer(void);
 RowMixerFunc SelectRowMixer(void);
+ResamplerFunc SelectResampler(enum Resampler resampler);
 
 /* aluInitRenderer
  *

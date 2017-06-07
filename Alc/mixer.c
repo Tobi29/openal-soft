@@ -41,52 +41,42 @@
 static_assert((INT_MAX>>FRACTIONBITS)/MAX_PITCH > BUFFERSIZE,
               "MAX_PITCH and/or BUFFERSIZE are too large for FRACTIONBITS!");
 
-extern inline void InitiatePositionArrays(ALuint frac, ALint increment, ALuint *restrict frac_arr, ALint *restrict pos_arr, ALsizei size);
+extern inline void InitiatePositionArrays(ALsizei frac, ALint increment, ALsizei *restrict frac_arr, ALint *restrict pos_arr, ALsizei size);
 
-alignas(16) ALfloat ResampleCoeffs_FIR4[FRACTIONONE][4];
-
-
-enum Resampler {
-    PointResampler,
-    LinearResampler,
-    FIR4Resampler,
-    BSincResampler,
-
-    ResamplerDefault = LinearResampler
-};
 
 /* BSinc requires up to 11 extra samples before the current position, and 12 after. */
 static_assert(MAX_PRE_SAMPLES >= 11, "MAX_PRE_SAMPLES must be at least 11!");
 static_assert(MAX_POST_SAMPLES >= 12, "MAX_POST_SAMPLES must be at least 12!");
 
 
+enum Resampler ResamplerDefault = LinearResampler;
+
 static MixerFunc MixSamples = Mix_C;
 static HrtfMixerFunc MixHrtfSamples = MixHrtf_C;
-static ResamplerFunc ResampleSamples = Resample_point32_C;
+HrtfMixerBlendFunc MixHrtfBlendSamples = MixHrtfBlend_C;
 
 MixerFunc SelectMixer(void)
 {
-#ifdef HAVE_SSE
-    if((CPUCapFlags&CPU_CAP_SSE))
-        return Mix_SSE;
-#endif
 #ifdef HAVE_NEON
     if((CPUCapFlags&CPU_CAP_NEON))
         return Mix_Neon;
 #endif
-
+#ifdef HAVE_SSE
+    if((CPUCapFlags&CPU_CAP_SSE))
+        return Mix_SSE;
+#endif
     return Mix_C;
 }
 
 RowMixerFunc SelectRowMixer(void)
 {
-#ifdef HAVE_SSE
-    if((CPUCapFlags&CPU_CAP_SSE))
-        return MixRow_SSE;
-#endif
 #ifdef HAVE_NEON
     if((CPUCapFlags&CPU_CAP_NEON))
         return MixRow_Neon;
+#endif
+#ifdef HAVE_SSE
+    if((CPUCapFlags&CPU_CAP_SSE))
+        return MixRow_SSE;
 #endif
     return MixRow_C;
 }
@@ -101,11 +91,23 @@ static inline HrtfMixerFunc SelectHrtfMixer(void)
     if((CPUCapFlags&CPU_CAP_SSE))
         return MixHrtf_SSE;
 #endif
-
     return MixHrtf_C;
 }
 
-static inline ResamplerFunc SelectResampler(enum Resampler resampler)
+static inline HrtfMixerBlendFunc SelectHrtfBlendMixer(void)
+{
+#ifdef HAVE_NEON
+    if((CPUCapFlags&CPU_CAP_NEON))
+        return MixHrtfBlend_Neon;
+#endif
+#ifdef HAVE_SSE
+    if((CPUCapFlags&CPU_CAP_SSE))
+        return MixHrtfBlend_SSE;
+#endif
+    return MixHrtfBlend_C;
+}
+
+ResamplerFunc SelectResampler(enum Resampler resampler)
 {
     switch(resampler)
     {
@@ -155,138 +157,47 @@ static inline ResamplerFunc SelectResampler(enum Resampler resampler)
 }
 
 
-/* The sinc resampler makes use of a Kaiser window to limit the needed sample
- * points to 4 and 8, respectively.
- */
-
-#ifndef M_PI
-#define M_PI                         (3.14159265358979323846)
-#endif
-static inline double Sinc(double x)
-{
-    if(x == 0.0) return 1.0;
-    return sin(x*M_PI) / (x*M_PI);
-}
-
-/* The zero-order modified Bessel function of the first kind, used for the
- * Kaiser window.
- *
- *   I_0(x) = sum_{k=0}^inf (1 / k!)^2 (x / 2)^(2 k)
- *          = sum_{k=0}^inf ((x / 2)^k / k!)^2
- */
-static double BesselI_0(double x)
-{
-    double term, sum, x2, y, last_sum;
-    int k;
-
-    /* Start at k=1 since k=0 is trivial. */
-    term = 1.0;
-    sum = 1.0;
-    x2 = x / 2.0;
-    k = 1;
-
-    /* Let the integration converge until the term of the sum is no longer
-     * significant.
-     */
-    do {
-        y = x2 / k;
-        k ++;
-        last_sum = sum;
-        term *= y * y;
-        sum += term;
-    } while(sum != last_sum);
-    return sum;
-}
-
-/* Calculate a Kaiser window from the given beta value and a normalized k
- * [-1, 1].
- *
- *   w(k) = { I_0(B sqrt(1 - k^2)) / I_0(B),  -1 <= k <= 1
- *          { 0,                              elsewhere.
- *
- * Where k can be calculated as:
- *
- *   k = i / l,         where -l <= i <= l.
- *
- * or:
- *
- *   k = 2 i / M - 1,   where 0 <= i <= M.
- */
-static inline double Kaiser(double b, double k)
-{
-    if(k <= -1.0 || k >= 1.0) return 0.0;
-    return BesselI_0(b * sqrt(1.0 - (k*k))) / BesselI_0(b);
-}
-
-static inline double CalcKaiserBeta(double rejection)
-{
-    if(rejection > 50.0)
-        return 0.1102 * (rejection - 8.7);
-    if(rejection >= 21.0)
-        return (0.5842 * pow(rejection - 21.0, 0.4)) +
-               (0.07886 * (rejection - 21.0));
-    return 0.0;
-}
-
-static float SincKaiser(double r, double x)
-{
-    /* Limit rippling to -60dB. */
-    return (float)(Kaiser(CalcKaiserBeta(60.0), x / r) * Sinc(x));
-}
-
-
 void aluInitMixer(void)
 {
-    enum Resampler resampler = ResamplerDefault;
     const char *str;
-    ALuint i;
 
     if(ConfigValueStr(NULL, NULL, "resampler", &str))
     {
         if(strcasecmp(str, "point") == 0 || strcasecmp(str, "none") == 0)
-            resampler = PointResampler;
+            ResamplerDefault = PointResampler;
         else if(strcasecmp(str, "linear") == 0)
-            resampler = LinearResampler;
+            ResamplerDefault = LinearResampler;
         else if(strcasecmp(str, "sinc4") == 0)
-            resampler = FIR4Resampler;
+            ResamplerDefault = FIR4Resampler;
         else if(strcasecmp(str, "bsinc") == 0)
-            resampler = BSincResampler;
+            ResamplerDefault = BSincResampler;
         else if(strcasecmp(str, "cubic") == 0 || strcasecmp(str, "sinc8") == 0)
         {
             WARN("Resampler option \"%s\" is deprecated, using sinc4\n", str);
-            resampler = FIR4Resampler;
+            ResamplerDefault = FIR4Resampler;
         }
         else
         {
             char *end;
             long n = strtol(str, &end, 0);
             if(*end == '\0' && (n == PointResampler || n == LinearResampler || n == FIR4Resampler))
-                resampler = n;
+                ResamplerDefault = n;
             else
                 WARN("Invalid resampler: %s\n", str);
         }
     }
 
-    for(i = 0;i < FRACTIONONE;i++)
-    {
-        ALdouble mu = (ALdouble)i / FRACTIONONE;
-        ResampleCoeffs_FIR4[i][0] = SincKaiser(2.0, mu - -1.0);
-        ResampleCoeffs_FIR4[i][1] = SincKaiser(2.0, mu -  0.0);
-        ResampleCoeffs_FIR4[i][2] = SincKaiser(2.0, mu -  1.0);
-        ResampleCoeffs_FIR4[i][3] = SincKaiser(2.0, mu -  2.0);
-    }
-
+    MixHrtfBlendSamples = SelectHrtfBlendMixer();
     MixHrtfSamples = SelectHrtfMixer();
     MixSamples = SelectMixer();
-    ResampleSamples = SelectResampler(resampler);
 }
 
 
 static inline ALfloat Sample_ALbyte(ALbyte val)
-{ return val * (1.0f/127.0f); }
+{ return val * (1.0f/128.0f); }
 
 static inline ALfloat Sample_ALshort(ALshort val)
-{ return val * (1.0f/32767.0f); }
+{ return val * (1.0f/32768.0f); }
 
 static inline ALfloat Sample_ALfloat(ALfloat val)
 { return val; }
@@ -369,26 +280,27 @@ static const ALfloat *DoFilters(ALfilterState *lpfilter, ALfilterState *hpfilter
 ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei SamplesToDo)
 {
     ALbufferlistitem *BufferListItem;
+    ALbufferlistitem *BufferLoopItem;
     ALsizei NumChannels, SampleSize;
     ResamplerFunc Resample;
     ALsizei DataPosInt;
-    ALuint DataPosFrac;
+    ALsizei DataPosFrac;
     ALint64 DataSize64;
     ALint increment;
     ALsizei Counter;
     ALsizei OutPos;
     ALsizei IrSize;
     bool isplaying;
-    bool islooping;
+    bool firstpass;
     ALsizei chan;
     ALsizei send;
 
     /* Get source info */
     isplaying      = true; /* Will only be called while playing. */
-    islooping      = ATOMIC_LOAD(&Source->looping, almemory_order_acquire);
-    DataPosInt     = ATOMIC_LOAD(&voice->position, almemory_order_relaxed);
+    DataPosInt     = ATOMIC_LOAD(&voice->position, almemory_order_acquire);
     DataPosFrac    = ATOMIC_LOAD(&voice->position_fraction, almemory_order_relaxed);
     BufferListItem = ATOMIC_LOAD(&voice->current_buffer, almemory_order_relaxed);
+    BufferLoopItem = ATOMIC_LOAD(&voice->loop_buffer, almemory_order_relaxed);
     NumChannels    = voice->NumChannels;
     SampleSize     = voice->SampleSize;
     increment      = voice->Step;
@@ -396,10 +308,12 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
     IrSize = (Device->HrtfHandle ? Device->HrtfHandle->irSize : 0);
 
     Resample = ((increment == FRACTIONONE && DataPosFrac == 0) ?
-                Resample_copy32_C : ResampleSamples);
+                Resample_copy32_C : voice->Resampler);
 
-    Counter = (voice->Flags&VOICE_IS_MOVING) ? SamplesToDo : 0;
+    Counter = (voice->Flags&VOICE_IS_FADING) ? SamplesToDo : 0;
+    firstpass = true;
     OutPos = 0;
+
     do {
         ALsizei SrcBufferSize, DstBufferSize;
 
@@ -446,9 +360,9 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                 Data += chan*SampleSize;
 
                 /* If current pos is beyond the loop range, do not loop */
-                if(!islooping || DataPosInt >= ALBuffer->LoopEnd)
+                if(!BufferLoopItem || DataPosInt >= ALBuffer->LoopEnd)
                 {
-                    islooping = false;
+                    BufferLoopItem = NULL;
 
                     /* Load what's left to play from the source buffer, and
                      * clear the rest of the temp buffer */
@@ -515,9 +429,9 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                             SrcDataSize += DataSize;
                         }
                     }
-                    tmpiter = tmpiter->next;
-                    if(!tmpiter && islooping)
-                        tmpiter = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
+                    tmpiter = ATOMIC_LOAD(&tmpiter->next, almemory_order_acquire);
+                    if(!tmpiter && BufferLoopItem)
+                        tmpiter = BufferLoopItem;
                     else if(!tmpiter)
                     {
                         SilenceSamples(&SrcData[SrcDataSize], SrcBufferSize - SrcDataSize);
@@ -543,9 +457,9 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
 
                 samples = DoFilters(
                     &parms->LowPass, &parms->HighPass, Device->FilteredData,
-                    ResampledData, DstBufferSize, parms->FilterType
+                    ResampledData, DstBufferSize, voice->Direct.FilterType
                 );
-                if(!(voice->Flags&VOICE_IS_HRTF))
+                if(!(voice->Flags&VOICE_HAS_HRTF))
                 {
                     if(!Counter)
                         memcpy(parms->Gains.Current, parms->Gains.Target,
@@ -588,6 +502,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                 else
                 {
                     MixHrtfParams hrtfparams;
+                    ALsizei fademix = 0;
                     int lidx, ridx;
 
                     lidx = GetChannelIdxByName(Device->RealOut, FrontLeft);
@@ -596,62 +511,79 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
 
                     if(!Counter)
                     {
+                        /* No fading, just overwrite the old HRTF params. */
                         parms->Hrtf.Old = parms->Hrtf.Target;
-                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Target.Coeffs);
-                        hrtfparams.Delay[0] = parms->Hrtf.Target.Delay[0];
-                        hrtfparams.Delay[1] = parms->Hrtf.Target.Delay[1];
-                        hrtfparams.Gain = parms->Hrtf.Target.Gain;
-                        hrtfparams.GainStep = 0.0f;
-                        MixHrtfSamples(
-                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
-                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
-                            &parms->Hrtf.State, DstBufferSize
-                        );
                     }
-                    else
+                    else if(!(parms->Hrtf.Old.Gain > GAIN_SILENCE_THRESHOLD))
                     {
-                        HrtfState backupstate = parms->Hrtf.State;
+                        /* The old HRTF params are silent, so overwrite the old
+                         * coefficients with the new, and reset the old gain to
+                         * 0. The future mix will then fade from silence.
+                         */
+                        parms->Hrtf.Old = parms->Hrtf.Target;
+                        parms->Hrtf.Old.Gain = 0.0f;
+                    }
+                    else if(firstpass)
+                    {
                         ALfloat gain;
 
-                        /* The old coefficients need to fade to silence
-                         * completely since they'll be replaced after the mix.
-                         * So it needs to fade out over DstBufferSize instead
-                         * of Counter.
-                         */
-                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Old.Coeffs);
-                        hrtfparams.Delay[0] = parms->Hrtf.Old.Delay[0];
-                        hrtfparams.Delay[1] = parms->Hrtf.Old.Delay[1];
-                        hrtfparams.Gain = parms->Hrtf.Old.Gain;
-                        hrtfparams.GainStep = -hrtfparams.Gain /
-                                              (ALfloat)DstBufferSize;
-                        MixHrtfSamples(
-                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
-                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
-                            &backupstate, DstBufferSize
-                        );
+                        /* Fade between the coefficients over 128 samples. */
+                        fademix = mini(DstBufferSize, 128);
 
                         /* The new coefficients need to fade in completely
                          * since they're replacing the old ones. To keep the
-                         * source gain fading consistent, interpolate between
-                         * the old and new target gain given how much of the
-                         * fade time this mix handles.
+                         * gain fading consistent, interpolate between the old
+                         * and new target gains given how much of the fade time
+                         * this mix handles.
                          */
                         gain = lerp(parms->Hrtf.Old.Gain, parms->Hrtf.Target.Gain,
-                                    (ALfloat)DstBufferSize/Counter);
+                                    minf(1.0f, (ALfloat)fademix/Counter));
                         hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Target.Coeffs);
                         hrtfparams.Delay[0] = parms->Hrtf.Target.Delay[0];
                         hrtfparams.Delay[1] = parms->Hrtf.Target.Delay[1];
                         hrtfparams.Gain = 0.0f;
-                        hrtfparams.GainStep = gain / (ALfloat)DstBufferSize;
-                        MixHrtfSamples(
+                        hrtfparams.GainStep = gain / (ALfloat)fademix;
+
+                        MixHrtfBlendSamples(
                             voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
-                            samples, voice->Offset, OutPos, IrSize, &hrtfparams,
-                            &parms->Hrtf.State, DstBufferSize
+                            samples, voice->Offset, OutPos, IrSize, &parms->Hrtf.Old,
+                            &hrtfparams, &parms->Hrtf.State, fademix
                         );
                         /* Update the old parameters with the result. */
                         parms->Hrtf.Old = parms->Hrtf.Target;
-                        if(DstBufferSize < Counter)
+                        if(fademix < Counter)
                             parms->Hrtf.Old.Gain = hrtfparams.Gain;
+                    }
+
+                    if(fademix < DstBufferSize)
+                    {
+                        ALsizei todo = DstBufferSize - fademix;
+                        ALfloat gain = parms->Hrtf.Target.Gain;
+
+                        /* Interpolate the target gain if the gain fading lasts
+                         * longer than this mix.
+                         */
+                        if(Counter > DstBufferSize)
+                            gain = lerp(parms->Hrtf.Old.Gain, gain,
+                                        (ALfloat)todo/(Counter-fademix));
+
+                        hrtfparams.Coeffs = SAFE_CONST(ALfloat2*,parms->Hrtf.Target.Coeffs);
+                        hrtfparams.Delay[0] = parms->Hrtf.Target.Delay[0];
+                        hrtfparams.Delay[1] = parms->Hrtf.Target.Delay[1];
+                        hrtfparams.Gain = parms->Hrtf.Old.Gain;
+                        hrtfparams.GainStep = (gain - parms->Hrtf.Old.Gain) / (ALfloat)todo;
+                        MixHrtfSamples(
+                            voice->Direct.Buffer[lidx], voice->Direct.Buffer[ridx],
+                            samples+fademix, voice->Offset+fademix, OutPos+fademix, IrSize,
+                            &hrtfparams, &parms->Hrtf.State, todo
+                        );
+                        /* Store the interpolated gain or the final target gain
+                         * depending if the fade is done.
+                         */
+                        if(DstBufferSize < Counter)
+                            parms->Hrtf.Old.Gain = gain;
+                        else
+                            parms->Hrtf.Old.Gain = parms->Hrtf.Target.Gain;
                     }
                 }
             }
@@ -666,7 +598,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
 
                 samples = DoFilters(
                     &parms->LowPass, &parms->HighPass, Device->FilteredData,
-                    ResampledData, DstBufferSize, parms->FilterType
+                    ResampledData, DstBufferSize, voice->Send[send].FilterType
                 );
 
                 if(!Counter)
@@ -685,6 +617,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
         OutPos += DstBufferSize;
         voice->Offset += DstBufferSize;
         Counter = maxi(DstBufferSize, Counter) - DstBufferSize;
+        firstpass = false;
 
         /* Handle looping sources */
         while(1)
@@ -703,7 +636,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
                     break;
             }
 
-            if(islooping && Source->SourceType == AL_STATIC)
+            if(BufferLoopItem && Source->SourceType == AL_STATIC)
             {
                 assert(LoopEnd > LoopStart);
                 DataPosInt = ((DataPosInt-LoopStart)%(LoopEnd-LoopStart)) + LoopStart;
@@ -713,14 +646,13 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
             if(DataSize > DataPosInt)
                 break;
 
-            if(!(BufferListItem=BufferListItem->next))
+            BufferListItem = ATOMIC_LOAD(&BufferListItem->next, almemory_order_acquire);
+            if(!BufferListItem)
             {
-                if(islooping)
-                    BufferListItem = ATOMIC_LOAD(&Source->queue, almemory_order_acquire);
-                else
+                BufferListItem = BufferLoopItem;
+                if(!BufferListItem)
                 {
                     isplaying = false;
-                    BufferListItem = NULL;
                     DataPosInt = 0;
                     DataPosFrac = 0;
                     break;
@@ -731,7 +663,7 @@ ALboolean MixSource(ALvoice *voice, ALsource *Source, ALCdevice *Device, ALsizei
         }
     } while(isplaying && OutPos < SamplesToDo);
 
-    voice->Flags |= VOICE_IS_MOVING;
+    voice->Flags |= VOICE_IS_FADING;
 
     /* Update source info */
     ATOMIC_STORE(&voice->position,          DataPosInt, almemory_order_relaxed);

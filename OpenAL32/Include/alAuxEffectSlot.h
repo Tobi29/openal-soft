@@ -30,7 +30,7 @@ struct ALeffectStateVtable {
 
     ALboolean (*const deviceUpdate)(ALeffectState *state, ALCdevice *device);
     void (*const update)(ALeffectState *state, const ALCdevice *device, const struct ALeffectslot *slot, const union ALeffectProps *props);
-    void (*const process)(ALeffectState *state, ALuint samplesToDo, const ALfloat (*restrict samplesIn)[BUFFERSIZE], ALfloat (*restrict samplesOut)[BUFFERSIZE], ALuint numChannels);
+    void (*const process)(ALeffectState *state, ALsizei samplesToDo, const ALfloat (*restrict samplesIn)[BUFFERSIZE], ALfloat (*restrict samplesOut)[BUFFERSIZE], ALsizei numChannels);
 
     void (*const Delete)(void *ptr);
 };
@@ -39,7 +39,7 @@ struct ALeffectStateVtable {
 DECLARE_THUNK(T, ALeffectState, void, Destruct)                               \
 DECLARE_THUNK1(T, ALeffectState, ALboolean, deviceUpdate, ALCdevice*)         \
 DECLARE_THUNK3(T, ALeffectState, void, update, const ALCdevice*, const ALeffectslot*, const ALeffectProps*) \
-DECLARE_THUNK4(T, ALeffectState, void, process, ALuint, const ALfloatBUFFERSIZE*restrict, ALfloatBUFFERSIZE*restrict, ALuint) \
+DECLARE_THUNK4(T, ALeffectState, void, process, ALsizei, const ALfloatBUFFERSIZE*restrict, ALfloatBUFFERSIZE*restrict, ALsizei) \
 static void T##_ALeffectState_Delete(void *ptr)                               \
 { return T##_Delete(STATIC_UPCAST(T, ALeffectState, (ALeffectState*)ptr)); }  \
                                                                               \
@@ -73,6 +73,12 @@ static const struct ALeffectStateFactoryVtable T##_ALeffectStateFactory_vtable =
 
 
 #define MAX_EFFECT_CHANNELS (4)
+
+
+struct ALeffectslotArray {
+    ALsizei count;
+    struct ALeffectslot *slot[];
+};
 
 
 struct ALeffectslotProps {
@@ -115,6 +121,8 @@ typedef struct ALeffectslot {
 
         ALfloat RoomRolloff; /* Added to the source's room rolloff, not multiplied. */
         ALfloat DecayTime;
+        ALfloat DecayHFRatio;
+        ALboolean DecayHFLimit;
         ALfloat AirAbsorptionGainHF;
     } Params;
 
@@ -134,8 +142,6 @@ typedef struct ALeffectslot {
      * first-order device output (FOAOut).
      */
     alignas(16) ALfloat WetBuffer[MAX_EFFECT_CHANNELS][BUFFERSIZE];
-
-    ATOMIC(struct ALeffectslot*) next;
 } ALeffectslot;
 
 inline void LockEffectSlotsRead(ALCcontext *context)

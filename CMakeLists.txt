@@ -1,6 +1,6 @@
 # CMake build file list for OpenAL
 
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8.5)
+CMAKE_MINIMUM_REQUIRED(VERSION 3.0.2)
 
 PROJECT(OpenAL)
 
@@ -97,8 +97,8 @@ IF(NOT LIBTYPE)
 ENDIF()
 
 SET(LIB_MAJOR_VERSION "1")
-SET(LIB_MINOR_VERSION "17")
-SET(LIB_REVISION "2")
+SET(LIB_MINOR_VERSION "18")
+SET(LIB_REVISION "0")
 SET(LIB_VERSION "${LIB_MAJOR_VERSION}.${LIB_MINOR_VERSION}.${LIB_REVISION}")
 
 SET(EXPORT_DECL "")
@@ -264,23 +264,16 @@ HAVE_C11_ALIGNAS)
 # Check if we have C11 _Atomic
 CHECK_C_SOURCE_COMPILES(
 "#include <stdatomic.h>
- const int _Atomic foo = ATOMIC_VAR_INIT(~0);
- int _Atomic bar = ATOMIC_VAR_INIT(0);
+ int _Atomic foo = ATOMIC_VAR_INIT(0);
  int main()
  {
-     atomic_fetch_add(&bar, 2);
-     return atomic_load(&foo);
+     atomic_fetch_add(&foo, 2);
+     return 0;
  }"
 HAVE_C11_ATOMIC)
 
 # Add definitions, compiler switches, etc.
-INCLUDE_DIRECTORIES("${OpenAL_SOURCE_DIR}/include" "${OpenAL_BINARY_DIR}")
-IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-    INCLUDE_DIRECTORIES("${OpenAL_SOURCE_DIR}/OpenAL32/Include" "${OpenAL_SOURCE_DIR}/Alc")
-    IF(WIN32 AND ALSOFT_NO_UID_DEFS)
-        ADD_DEFINITIONS("-DAL_NO_UID_DEFS")
-    ENDIF()
-ENDIF()
+INCLUDE_DIRECTORIES("${OpenAL_SOURCE_DIR}/include" "${OpenAL_SOURCE_DIR}/common" "${OpenAL_BINARY_DIR}")
 
 IF(NOT CMAKE_BUILD_TYPE)
     SET(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
@@ -329,17 +322,6 @@ ELSE()
         SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -Werror")
     ENDIF()
 
-    # Force enable -fPIC for CMake versions before 2.8.9 (later versions have
-    # the POSITION_INDEPENDENT_CODE target property). The static common library
-    # will be linked into the dynamic OpenAL library, which requires all its
-    # code to be position-independent.
-    IF(CMAKE_VERSION VERSION_LESS "2.8.9" AND NOT WIN32)
-        CHECK_C_COMPILER_FLAG(-fPIC HAVE_FPIC_SWITCH)
-        IF(HAVE_FPIC_SWITCH)
-            SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fPIC")
-        ENDIF()
-    ENDIF()
-
     # We want RelWithDebInfo to actually include debug stuff (define _DEBUG
     # instead of NDEBUG)
     FOREACH(flag_var  CMAKE_C_FLAGS_RELWITHDEBINFO CMAKE_CXX_FLAGS_RELWITHDEBINFO)
@@ -347,6 +329,11 @@ ELSE()
             STRING(REGEX REPLACE "-DNDEBUG" "-D_DEBUG" ${flag_var} "${${flag_var}}")
         ENDIF()
     ENDFOREACH()
+
+    CHECK_C_COMPILER_FLAG(-fno-math-errno HAVE_FNO_MATH_ERRNO)
+    IF(HAVE_FNO_MATH_ERRNO)
+        SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fno-math-errno")
+    ENDIF()
 
     CHECK_C_SOURCE_COMPILES("int foo() __attribute__((destructor));
                              int main() {return 0;}" HAVE_GCC_DESTRUCTOR)
@@ -372,7 +359,6 @@ int main()
 ENDIF()
 
 # Set visibility/export options if available
-SET(HIDDEN_DECL "")
 IF(WIN32)
     SET(EXPORT_DECL "__declspec(dllexport)")
     IF(NOT MINGW)
@@ -401,7 +387,6 @@ ELSE()
         CHECK_C_COMPILER_FLAG(-fvisibility=hidden HAVE_VISIBILITY_HIDDEN_SWITCH)
         IF(HAVE_VISIBILITY_HIDDEN_SWITCH)
             SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fvisibility=hidden")
-            SET(HIDDEN_DECL "__attribute__((visibility(\"hidden\")))")
         ENDIF()
     ENDIF()
 
@@ -707,6 +692,8 @@ SET(ALC_OBJS  Alc/ALc.c
               Alc/alcConfig.c
               Alc/alcRing.c
               Alc/bs2b.c
+              Alc/converter.c
+              Alc/mastering.c
               Alc/effects/chorus.c
               Alc/effects/compressor.c
               Alc/effects/dedicated.c
@@ -881,9 +868,6 @@ IF(ALSA_FOUND)
         SET(BACKENDS  "${BACKENDS} ALSA${IS_LINKED},")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/alsa.c)
         ADD_BACKEND_LIBS(${ALSA_LIBRARIES})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${ALSA_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_ALSA AND NOT HAVE_ALSA)
@@ -899,9 +883,6 @@ IF(OSS_FOUND)
         SET(HAVE_OSS 1)
         SET(BACKENDS  "${BACKENDS} OSS,")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/oss.c)
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${OSS_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_OSS AND NOT HAVE_OSS)
@@ -917,9 +898,6 @@ IF(AUDIOIO_FOUND)
         SET(HAVE_SOLARIS 1)
         SET(BACKENDS  "${BACKENDS} Solaris,")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/solaris.c)
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${AUDIOIO_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_SOLARIS AND NOT HAVE_SOLARIS)
@@ -936,9 +914,6 @@ IF(SOUNDIO_FOUND)
         SET(BACKENDS  "${BACKENDS} SndIO (linked),")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/sndio.c)
         SET(EXTRA_LIBS ${SOUNDIO_LIBRARIES} ${EXTRA_LIBS})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${SOUNDIO_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_SNDIO AND NOT HAVE_SNDIO)
@@ -955,9 +930,6 @@ IF(QSA_FOUND)
         SET(BACKENDS  "${BACKENDS} QSA (linked),")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/qsa.c)
         SET(EXTRA_LIBS ${QSA_LIBRARIES} ${EXTRA_LIBS})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${QSA_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_QSA AND NOT HAVE_QSA)
@@ -993,9 +965,6 @@ IF(HAVE_WINDOWS_H)
             SET(BACKENDS  "${BACKENDS} DirectSound${IS_LINKED},")
             SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/dsound.c)
             ADD_BACKEND_LIBS(${DSOUND_LIBRARIES})
-            IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-                INCLUDE_DIRECTORIES(${DSOUND_INCLUDE_DIRS})
-            ENDIF()
         ENDIF()
     ENDIF()
 
@@ -1030,9 +999,6 @@ IF(PORTAUDIO_FOUND)
         SET(BACKENDS  "${BACKENDS} PortAudio${IS_LINKED},")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/portaudio.c)
         ADD_BACKEND_LIBS(${PORTAUDIO_LIBRARIES})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${PORTAUDIO_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_PORTAUDIO AND NOT HAVE_PORTAUDIO)
@@ -1049,9 +1015,6 @@ IF(PULSEAUDIO_FOUND)
         SET(BACKENDS  "${BACKENDS} PulseAudio${IS_LINKED},")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/pulseaudio.c)
         ADD_BACKEND_LIBS(${PULSEAUDIO_LIBRARIES})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${PULSEAUDIO_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_PULSEAUDIO AND NOT HAVE_PULSEAUDIO)
@@ -1068,9 +1031,6 @@ IF(JACK_FOUND)
         SET(BACKENDS  "${BACKENDS} JACK${IS_LINKED},")
         SET(ALC_OBJS  ${ALC_OBJS} Alc/backends/jack.c)
         ADD_BACKEND_LIBS(${JACK_LIBRARIES})
-        IF(CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${JACK_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 IF(ALSOFT_REQUIRE_JACK AND NOT HAVE_JACK)
@@ -1142,44 +1102,35 @@ SET(BACKENDS  "${BACKENDS} Null")
 
 option(ALSOFT_EMBED_HRTF_DATA "Embed the HRTF data files (increases library footprint)" OFF)
 if(ALSOFT_EMBED_HRTF_DATA)
-    if(WIN32)
-        set(ALC_OBJS  ${ALC_OBJS} Alc/hrtf_res.rc)
-    elseif(APPLE)
-        macro(add_custom_binary FILENAME BIN_NAME)
-            set(outfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}${CMAKE_C_OUTPUT_EXTENSION})
-            set(stubsrcfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}.stub.c)
-            set(stubfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}.stub${CMAKE_C_OUTPUT_EXTENSION})
-            add_custom_command(OUTPUT ${outfile}
-                DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hrtf/${FILENAME}"
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/hrtf"
-                COMMAND touch "${stubsrcfile}"
-                COMMAND "${CMAKE_C_COMPILER}" -o "${stubfile}" -c "${stubsrcfile}"
-                COMMAND "${CMAKE_LINKER}" -r -o "${outfile}" -sectcreate binary ${BIN_NAME} ${FILENAME} "${stubfile}"
-                COMMAND rm "${stubsrcfile}" "${stubfile}"
-                COMMENT "Generating ${FILENAME}${CMAKE_C_OUTPUT_EXTENSION}"
-                VERBATIM
-            )
-            set(ALC_OBJS  ${ALC_OBJS} ${outfile})
-        endmacro()
-        add_custom_binary(default-44100.mhr "default_44100")
-        add_custom_binary(default-48000.mhr "default_48000")
-    else()
-        set(FILENAMES default-44100.mhr default-48000.mhr)
-        foreach(FILENAME ${FILENAMES})
-            set(outfile ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/${FILENAME}${CMAKE_C_OUTPUT_EXTENSION})
-            add_custom_command(OUTPUT ${outfile}
-                DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/hrtf/${FILENAME}"
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/hrtf"
-                COMMAND "${CMAKE_LINKER}" -r -b binary -o "${outfile}" ${FILENAME}
-                COMMAND "${CMAKE_OBJCOPY}" --rename-section .data=.rodata,alloc,load,readonly,data,contents "${outfile}" "${outfile}"
-                COMMENT "Generating ${FILENAME}${CMAKE_C_OUTPUT_EXTENSION}"
-                VERBATIM
-            )
-            set(ALC_OBJS  ${ALC_OBJS} ${outfile})
-        endforeach()
-        unset(outfile)
-        unset(FILENAMES)
-    endif()
+    SET(NATIVE_SRC_DIR  "${OpenAL_SOURCE_DIR}/native-tools/")
+    SET(NATIVE_BIN_DIR  "${OpenAL_BINARY_DIR}/native-tools/")
+    FILE(MAKE_DIRECTORY "${NATIVE_BIN_DIR}")
+
+    SET(BIN2H_COMMAND  "${NATIVE_BIN_DIR}bin2h")
+    ADD_CUSTOM_COMMAND(OUTPUT "${BIN2H_COMMAND}"
+        COMMAND ${CMAKE_COMMAND} "${NATIVE_SRC_DIR}"
+        COMMAND ${CMAKE_COMMAND} --build . --config "Release"
+        WORKING_DIRECTORY "${NATIVE_BIN_DIR}"
+        DEPENDS "${NATIVE_SRC_DIR}CMakeLists.txt" "${NATIVE_SRC_DIR}bin2h.c"
+        VERBATIM
+    )
+
+    MACRO(make_hrtf_header FILENAME VARNAME)
+        SET(infile  "${OpenAL_SOURCE_DIR}/hrtf/${FILENAME}")
+        SET(outfile  "${OpenAL_BINARY_DIR}/${FILENAME}.h")
+
+        ADD_CUSTOM_COMMAND(OUTPUT "${outfile}"
+            COMMAND "${BIN2H_COMMAND}" "${infile}" "${outfile}" ${VARNAME}
+            DEPENDS "${BIN2H_COMMAND}" "${infile}"
+            COMMENT "Generating ${FILENAME}.h"
+            VERBATIM
+        )
+
+        SET(ALC_OBJS  ${ALC_OBJS} "${outfile}")
+    ENDMACRO()
+
+    make_hrtf_header(default-44100.mhr "hrtf_default_44100")
+    make_hrtf_header(default-48000.mhr "hrtf_default_48000")
 endif()
 
 
@@ -1190,13 +1141,7 @@ IF(ALSOFT_EXAMPLES)
     FIND_PACKAGE(SDL2)
     IF(SDL2_FOUND)
         FIND_PACKAGE(SDL_sound)
-        IF(SDL_SOUND_FOUND AND CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${SDL2_INCLUDE_DIR} ${SDL_SOUND_INCLUDE_DIR})
-        ENDIF()
         FIND_PACKAGE(FFmpeg COMPONENTS AVFORMAT AVCODEC AVUTIL SWSCALE SWRESAMPLE)
-        IF(FFMPEG_FOUND AND CMAKE_VERSION VERSION_LESS "2.8.8")
-            INCLUDE_DIRECTORIES(${FFMPEG_INCLUDE_DIRS})
-        ENDIF()
     ENDIF()
 ENDIF()
 
@@ -1337,7 +1282,7 @@ IF(ALSOFT_INSTALL)
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} ${CMAKE_INSTALL_INCLUDEDIR}/AL
     )
     EXPORT(TARGETS OpenAL
            NAMESPACE OpenAL::

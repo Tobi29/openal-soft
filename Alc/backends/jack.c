@@ -115,7 +115,7 @@ static ALCboolean jack_load(void)
     p##f = GetSymbol(jack_handle, #f);                                        \
     if(p##f == NULL) {                                                        \
         error = ALC_TRUE;                                                     \
-        al_string_append_cstr(&missing_funcs, "\n" #f);                       \
+        alstr_append_cstr(&missing_funcs, "\n" #f);                           \
     }                                                                         \
 } while(0)
         JACK_FUNCS(LOAD_FUNC);
@@ -123,11 +123,11 @@ static ALCboolean jack_load(void)
 
         if(error)
         {
-            WARN("Missing expected functions:%s\n", al_string_get_cstr(missing_funcs));
+            WARN("Missing expected functions:%s\n", alstr_get_cstr(missing_funcs));
             CloseLib(jack_handle);
             jack_handle = NULL;
         }
-        al_string_deinit(&missing_funcs);
+        alstr_reset(&missing_funcs);
     }
 #endif
 
@@ -163,8 +163,8 @@ static void ALCjackPlayback_stop(ALCjackPlayback *self);
 static DECLARE_FORWARD2(ALCjackPlayback, ALCbackend, ALCenum, captureSamples, void*, ALCuint)
 static DECLARE_FORWARD(ALCjackPlayback, ALCbackend, ALCuint, availableSamples)
 static ClockLatency ALCjackPlayback_getClockLatency(ALCjackPlayback *self);
-static void ALCjackPlayback_lock(ALCjackPlayback *self);
-static void ALCjackPlayback_unlock(ALCjackPlayback *self);
+static DECLARE_FORWARD(ALCjackPlayback, ALCbackend, void, lock)
+static DECLARE_FORWARD(ALCjackPlayback, ALCbackend, void, unlock)
 DECLARE_DEFAULT_ALLOCATORS(ALCjackPlayback)
 
 DEFINE_ALCBACKEND_VTABLE(ALCjackPlayback);
@@ -220,7 +220,7 @@ static int ALCjackPlayback_bufferSizeNotify(jack_nframes_t numframes, void *arg)
     device->NumUpdates = 2;
 
     bufsize = device->UpdateSize;
-    if(ConfigValueUInt(al_string_get_cstr(device->DeviceName), "jack", "buffer-size", &bufsize))
+    if(ConfigValueUInt(alstr_get_cstr(device->DeviceName), "jack", "buffer-size", &bufsize))
         bufsize = maxu(NextPowerOf2(bufsize), device->UpdateSize);
     bufsize += device->UpdateSize;
     device->NumUpdates = bufsize / device->UpdateSize;
@@ -228,7 +228,9 @@ static int ALCjackPlayback_bufferSizeNotify(jack_nframes_t numframes, void *arg)
     TRACE("%u update size x%u\n", device->UpdateSize, device->NumUpdates);
 
     ll_ringbuffer_free(self->Ring);
-    self->Ring = ll_ringbuffer_create(bufsize, FrameSizeFromDevFmt(device->FmtChans, device->FmtType));
+    self->Ring = ll_ringbuffer_create(bufsize,
+        FrameSizeFromDevFmt(device->FmtChans, device->FmtType, device->AmbiOrder)
+    );
     if(!self->Ring)
     {
         ERR("Failed to reallocate ringbuffer\n");
@@ -246,7 +248,7 @@ static int ALCjackPlayback_process(jack_nframes_t numframes, void *arg)
     ll_ringbuffer_data_t data[2];
     jack_nframes_t total = 0;
     jack_nframes_t todo;
-    ALuint i, c, numchans;
+    ALsizei i, c, numchans;
 
     ll_ringbuffer_get_read_vector(self->Ring, data);
 
@@ -258,7 +260,7 @@ static int ALCjackPlayback_process(jack_nframes_t numframes, void *arg)
     for(c = 0;c < numchans;c++)
     {
         const ALfloat *restrict in = ((ALfloat*)data[0].buf) + c;
-        for(i = 0;i < todo;i++)
+        for(i = 0;(jack_nframes_t)i < todo;i++)
             out[c][i] = in[i*numchans];
         out[c] += todo;
     }
@@ -270,7 +272,7 @@ static int ALCjackPlayback_process(jack_nframes_t numframes, void *arg)
         for(c = 0;c < numchans;c++)
         {
             const ALfloat *restrict in = ((ALfloat*)data[1].buf) + c;
-            for(i = 0;i < todo;i++)
+            for(i = 0;(jack_nframes_t)i < todo;i++)
                 out[c][i] = in[i*numchans];
             out[c] += todo;
         }
@@ -285,7 +287,7 @@ static int ALCjackPlayback_process(jack_nframes_t numframes, void *arg)
         todo = numframes-total;
         for(c = 0;c < numchans;c++)
         {
-            for(i = 0;i < todo;i++)
+            for(i = 0;(jack_nframes_t)i < todo;i++)
                 out[c][i] = 0.0f;
         }
     }
@@ -373,7 +375,7 @@ static ALCenum ALCjackPlayback_open(ALCjackPlayback *self, const ALCchar *name)
     jack_set_process_callback(self->Client, ALCjackPlayback_process, self);
     jack_set_buffer_size_callback(self->Client, ALCjackPlayback_bufferSizeNotify, self);
 
-    al_string_copy_cstr(&device->DeviceName, name);
+    alstr_copy_cstr(&device->DeviceName, name);
 
     return ALC_NO_ERROR;
 }
@@ -395,7 +397,7 @@ static void ALCjackPlayback_close(ALCjackPlayback *self)
 static ALCboolean ALCjackPlayback_reset(ALCjackPlayback *self)
 {
     ALCdevice *device = STATIC_CAST(ALCbackend, self)->mDevice;
-    ALuint numchans, i;
+    ALsizei numchans, i;
     ALuint bufsize;
 
     for(i = 0;i < MAX_OUTPUT_CHANNELS;i++)
@@ -415,7 +417,7 @@ static ALCboolean ALCjackPlayback_reset(ALCjackPlayback *self)
     device->NumUpdates = 2;
 
     bufsize = device->UpdateSize;
-    if(ConfigValueUInt(al_string_get_cstr(device->DeviceName), "jack", "buffer-size", &bufsize))
+    if(ConfigValueUInt(alstr_get_cstr(device->DeviceName), "jack", "buffer-size", &bufsize))
         bufsize = maxu(NextPowerOf2(bufsize), device->UpdateSize);
     bufsize += device->UpdateSize;
     device->NumUpdates = bufsize / device->UpdateSize;
@@ -423,7 +425,7 @@ static ALCboolean ALCjackPlayback_reset(ALCjackPlayback *self)
     /* Force 32-bit float output. */
     device->FmtType = DevFmtFloat;
 
-    numchans = ChannelsFromDevFmt(device->FmtChans);
+    numchans = ChannelsFromDevFmt(device->FmtChans, device->AmbiOrder);
     for(i = 0;i < numchans;i++)
     {
         char name[64];
@@ -452,7 +454,9 @@ static ALCboolean ALCjackPlayback_reset(ALCjackPlayback *self)
     }
 
     ll_ringbuffer_free(self->Ring);
-    self->Ring = ll_ringbuffer_create(bufsize, FrameSizeFromDevFmt(device->FmtChans, device->FmtType));
+    self->Ring = ll_ringbuffer_create(bufsize,
+        FrameSizeFromDevFmt(device->FmtChans, device->FmtType, device->AmbiOrder)
+    );
     if(!self->Ring)
     {
         ERR("Failed to allocate ringbuffer\n");
@@ -467,7 +471,7 @@ static ALCboolean ALCjackPlayback_reset(ALCjackPlayback *self)
 static ALCboolean ALCjackPlayback_start(ALCjackPlayback *self)
 {
     const char **ports;
-    ALuint i;
+    ALsizei i;
 
     if(jack_activate(self->Client))
     {
@@ -537,17 +541,6 @@ static ClockLatency ALCjackPlayback_getClockLatency(ALCjackPlayback *self)
     ALCjackPlayback_unlock(self);
 
     return ret;
-}
-
-
-static void ALCjackPlayback_lock(ALCjackPlayback *self)
-{
-    almtx_lock(&STATIC_CAST(ALCbackend,self)->mMutex);
-}
-
-static void ALCjackPlayback_unlock(ALCjackPlayback *self)
-{
-    almtx_unlock(&STATIC_CAST(ALCbackend,self)->mMutex);
 }
 
 

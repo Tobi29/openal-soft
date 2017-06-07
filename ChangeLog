@@ -2,7 +2,8 @@ openal-soft-1.18.0:
 
     Implemented the AL_EXT_STEREO_ANGLES and AL_EXT_SOURCE_RADIUS extensions.
 
-    Implemented the AL_SOFT_gain_clamp_ex extension.
+    Implemented the AL_SOFT_gain_clamp_ex, AL_SOFT_source_resampler,
+    AL_SOFT_source_spatialize, and ALC_SOFT_output_limiter extensions.
 
     Implemented 3D processing for some effects. Currently implemented for
     Reverb, Compressor, Equalizer, and Ring Modulator.
@@ -18,9 +19,16 @@ openal-soft-1.18.0:
     Currently only applies when using the high-quality ambisonic decoder or
     ambisonic output, with appropriate config options.
 
+    Implemented an output limiter to reduce the amount of distortion from
+    clipping.
+
+    Implemented dithering for 8-bit and 16-bit output.
+
     Implemented a config option to select a preferred HRTF.
 
     Implemented a run-time check for NEON extensions using /proc/cpuinfo.
+
+    Implemented experimental capture support for the OpenSL backend.
 
     Fixed building on compilers with NEON support but don't default to having
     NEON enabled.
@@ -69,9 +77,6 @@ openal-soft-1.18.0:
     Improved internal property handling for better batching behavior.
 
     Improved performance of certain filter uses.
-
-    Altered cone behavior for automatic auxiliary send gain and gainhf
-    management. Now better represents the energy the room receives.
 
     Removed support for the AL_SOFT_buffer_samples and AL_SOFT_buffer_sub_data
     extensions. Due to conflicts with AL_EXT_SOURCE_RADIUS.
