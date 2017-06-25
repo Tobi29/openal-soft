@@ -12,10 +12,9 @@
 
 static ALCdevice* device = NULL;
 static ALCcontext* context = NULL;
-static const ALint context_attribs[] = { ALC_FREQUENCY, 48000, 0 };
 
 // This function must be called once, before calling other AL functions:
-JNIEXPORT jboolean JNICALL Java_paulscode_android_sound_ALAN_create( JNIEnv* env, jclass klass )
+JNIEXPORT jboolean JNICALL Java_paulscode_android_sound_ALAN_create( JNIEnv* env, jclass klass, jintArray context_attribs )
 {
     logV( "Starting up ALAN..." );
     logV( "    Opening Android audio device" );
@@ -27,7 +26,15 @@ JNIEXPORT jboolean JNICALL Java_paulscode_android_sound_ALAN_create( JNIEnv* env
     }
 
     logV( "    Creating AL context" );
-    context = alcCreateContext( device, context_attribs );
+    jint *elements;
+    if( context_attribs )
+        elements = (*env)->GetIntArrayElements( env, context_attribs, NULL );
+    else
+        elements = NULL;
+    context = alcCreateContext( device, (const ALint *) elements );
+    if( context_attribs )
+        (*env)->ReleaseIntArrayElements( env, context_attribs, elements, 0 );
+
     if( !context )
     {
         logE( "    Failed to create AL context!" );
