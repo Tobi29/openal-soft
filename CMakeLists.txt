@@ -712,7 +712,7 @@ SET(OPENAL_OBJS
     OpenAL32/alExtension.cpp
     OpenAL32/Include/alFilter.h
     OpenAL32/alFilter.cpp
-    OpenAL32/alJNI.c
+    OpenAL32/alJNI.cpp
     OpenAL32/Include/alListener.h
     OpenAL32/alListener.cpp
     OpenAL32/Include/alSource.h
