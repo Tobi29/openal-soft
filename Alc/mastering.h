@@ -1,12 +1,75 @@
 #ifndef MASTERING_H
 #define MASTERING_H
 
+#include <memory>
+
 #include "AL/al.h"
 
+#include "almalloc.h"
 /* For BUFFERSIZE. */
 #include "alMain.h"
 
-struct Compressor;
+
+struct SlidingHold;
+
+/* General topology and basic automation was based on the following paper:
+ *
+ *   D. Giannoulis, M. Massberg and J. D. Reiss,
+ *   "Parameter Automation in a Dynamic Range Compressor,"
+ *   Journal of the Audio Engineering Society, v61 (10), Oct. 2013
+ *
+ * Available (along with supplemental reading) at:
+ *
+ *   http://c4dm.eecs.qmul.ac.uk/audioengineering/compressors/
+ */
+struct Compressor {
+    ALsizei mNumChans{0};
+    ALuint mSampleRate{0u};
+
+    struct {
+        bool Knee : 1;
+        bool Attack : 1;
+        bool Release : 1;
+        bool PostGain : 1;
+        bool Declip : 1;
+    } mAuto{};
+
+    ALsizei mLookAhead{0};
+
+    ALfloat mPreGain{0.0f};
+    ALfloat mPostGain{0.0f};
+
+    ALfloat mThreshold{0.0f};
+    ALfloat mSlope{0.0f};
+    ALfloat mKnee{0.0f};
+
+    ALfloat mAttack{0.0f};
+    ALfloat mRelease{0.0f};
+
+    alignas(16) ALfloat mSideChain[2*BUFFERSIZE]{};
+    alignas(16) ALfloat mCrestFactor[BUFFERSIZE]{};
+
+    SlidingHold *mHold{nullptr};
+    ALfloat (*mDelay)[BUFFERSIZE]{nullptr};
+    ALsizei mDelayIndex{0};
+
+    ALfloat mCrestCoeff{0.0f};
+    ALfloat mGainEstimate{0.0f};
+    ALfloat mAdaptCoeff{0.0f};
+
+    ALfloat mLastPeakSq{0.0f};
+    ALfloat mLastRmsSq{0.0f};
+    ALfloat mLastRelease{0.0f};
+    ALfloat mLastAttack{0.0f};
+    ALfloat mLastGainDev{0.0f};
+
+
+    ~Compressor();
+    void process(const ALsizei SamplesToDo, ALfloat (*OutBuffer)[BUFFERSIZE]);
+    ALsizei getLookAhead() const noexcept { return mLookAhead; }
+
+    DEF_PLACE_NEWDEL()
+};
 
 /* The compressor is initialized with the following settings:
  *
@@ -32,7 +95,7 @@ struct Compressor;
  *   ReleaseTimeMin - Release time (in seconds).  Acts as a maximum when
  *                    automating release time.
  */
-struct Compressor* CompressorInit(const ALsizei NumChans, const ALuint SampleRate,
+std::unique_ptr<Compressor> CompressorInit(const ALsizei NumChans, const ALuint SampleRate,
     const ALboolean AutoKnee, const ALboolean AutoAttack,
     const ALboolean AutoRelease, const ALboolean AutoPostGain,
     const ALboolean AutoDeclip, const ALfloat LookAheadTime,
@@ -40,10 +103,5 @@ struct Compressor* CompressorInit(const ALsizei NumChans, const ALuint SampleRat
     const ALfloat PostGainDb, const ALfloat ThresholdDb,
     const ALfloat Ratio, const ALfloat KneeDb,
     const ALfloat AttackTime, const ALfloat ReleaseTime);
-
-void ApplyCompression(struct Compressor *Comp, const ALsizei SamplesToDo,
-                      ALfloat (*restrict OutBuffer)[BUFFERSIZE]);
-
-ALsizei GetCompressorLookAhead(const struct Compressor *Comp);
 
 #endif /* MASTERING_H */

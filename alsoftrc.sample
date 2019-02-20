@@ -100,8 +100,8 @@
 
 ## ambi-format:
 #  Specifies the channel order and normalization for the "ambi*" set of channel
-#  configurations. Valid settings are: fuma, acn+sn3d, acn+n3d
-#ambi-format = acn+sn3d
+#  configurations. Valid settings are: fuma, ambix (or acn+sn3d), acn+n3d
+#ambi-format = ambix
 
 ## hrtf:
 #  Controls HRTF processing. These filters provide better spatialization of
@@ -344,6 +344,14 @@ surround71 =
 #  directly to the actual output rate, avoiding a second resample pass by the
 #  PulseAudio server.
 #fix-rate = false
+
+## adjust-latency:
+#  Attempts to adjust the overall latency of device playback. Note that this
+#  may have adverse effects on the resulting internal buffer sizes and mixing
+#  updates, leading to performance problems and drop-outs. However, if the
+#  PulseAudio server is creating a lot of latency, enabling this may help make
+#  it more manageable.
+#adjust-latency = false
 
 ##
 ## ALSA backend stuff

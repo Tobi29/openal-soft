@@ -119,8 +119,8 @@ static const struct NameValuePair {
     { "", "" }
 }, ambiFormatList[] = {
     { "Default", "" },
-    { "ACN + SN3D", "acn+sn3d" },
-    { "ACN + N3D", "acn+n3d" },
+    { "AmbiX (ACN, SN3D)", "ambix" },
+    { "ACN, N3D", "acn+n3d" },
     { "Furse-Malham", "fuma" },
 
     { "", "" }
@@ -215,13 +215,13 @@ static QString getNameFromValue(const NameValuePair (&list)[N], const QString &s
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow),
-    mPeriodSizeValidator(NULL),
-    mPeriodCountValidator(NULL),
-    mSourceCountValidator(NULL),
-    mEffectSlotValidator(NULL),
-    mSourceSendValidator(NULL),
-    mSampleRateValidator(NULL),
-    mJackBufferValidator(NULL),
+    mPeriodSizeValidator(nullptr),
+    mPeriodCountValidator(nullptr),
+    mSourceCountValidator(nullptr),
+    mEffectSlotValidator(nullptr),
+    mSourceSendValidator(nullptr),
+    mSampleRateValidator(nullptr),
+    mJackBufferValidator(nullptr),
     mNeedsSave(false)
 {
     ui->setupUi(this);
@@ -387,6 +387,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(ui->pulseAutospawnCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->pulseAllowMovesCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->pulseFixRateCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
+    connect(ui->pulseAdjLatencyCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
 
     connect(ui->jackAutospawnCheckBox, SIGNAL(stateChanged(int)), this, SLOT(enableApplyButton()));
     connect(ui->jackBufferSizeSlider, SIGNAL(valueChanged(int)), this, SLOT(updateJackBufferSizeEdit(int)));
@@ -855,6 +856,7 @@ void MainWindow::loadConfig(const QString &fname)
     ui->pulseAutospawnCheckBox->setChecked(settings.value("pulse/spawn-server", true).toBool());
     ui->pulseAllowMovesCheckBox->setChecked(settings.value("pulse/allow-moves", false).toBool());
     ui->pulseFixRateCheckBox->setChecked(settings.value("pulse/fix-rate", false).toBool());
+    ui->pulseAdjLatencyCheckBox->setChecked(settings.value("pulse/adjust-latency", false).toBool());
 
     ui->jackAutospawnCheckBox->setChecked(settings.value("jack/spawn-server", false).toBool());
     ui->jackBufferSizeLine->setText(settings.value("jack/buffer-size", QString()).toString());
@@ -916,7 +918,7 @@ void MainWindow::saveConfig(const QString &fname) const
     settings.setValue("channels", getValueFromName(speakerModeList, ui->channelConfigCombo->currentText()));
 
     uint rate = ui->sampleRateCombo->currentText().toUInt();
-    if(!(rate > 0))
+    if(rate <= 0)
         settings.setValue("frequency", QString());
     else
         settings.setValue("frequency", rate);
@@ -1081,6 +1083,9 @@ void MainWindow::saveConfig(const QString &fname) const
     settings.setValue("pulse/fix-rate",
         ui->pulseFixRateCheckBox->isChecked() ? QString("true") : QString(/*"false"*/)
     );
+    settings.setValue("pulse/adjust-latency",
+        ui->pulseAdjLatencyCheckBox->isChecked() ? QString("true") : QString(/*"false"*/)
+    );
 
     settings.setValue("jack/spawn-server",
         ui->jackAutospawnCheckBox->isChecked() ? QString("true") : QString(/*"false"*/)
@@ -1224,7 +1229,7 @@ void MainWindow::updateJackBufferSizeEdit(int size)
 void MainWindow::updateJackBufferSizeSlider()
 {
     int value = ui->jackBufferSizeLine->text().toInt();
-    int pos = (int)floor(log2(value) + 0.5);
+    int pos = static_cast<int>(floor(log2(value) + 0.5));
     ui->jackBufferSizeSlider->setSliderPosition(pos);
     enableApplyButton();
 }
@@ -1285,7 +1290,7 @@ void MainWindow::showEnabledBackendMenu(QPoint pt)
             delete item;
         enableApplyButton();
     }
-    else if(gotAction != NULL)
+    else if(gotAction != nullptr)
     {
         QMap<QAction*,QString>::const_iterator iter = actionMap.find(gotAction);
         if(iter != actionMap.end())
@@ -1323,7 +1328,7 @@ void MainWindow::showDisabledBackendMenu(QPoint pt)
             delete item;
         enableApplyButton();
     }
-    else if(gotAction != NULL)
+    else if(gotAction != nullptr)
     {
         QMap<QAction*,QString>::const_iterator iter = actionMap.find(gotAction);
         if(iter != actionMap.end())

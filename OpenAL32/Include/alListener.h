@@ -1,50 +1,44 @@
 #ifndef _AL_LISTENER_H_
 #define _AL_LISTENER_H_
 
-#include "alMain.h"
-#include "alu.h"
+#include <array>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "AL/alc.h"
+#include "AL/al.h"
+#include "AL/alext.h"
 
-struct ALcontextProps {
-    ALfloat DopplerFactor;
-    ALfloat DopplerVelocity;
-    ALfloat SpeedOfSound;
-    ALboolean SourceDistanceModel;
-    enum DistanceModel DistanceModel;
-    ALfloat MetersPerUnit;
+#include "atomic.h"
+#include "vecmat.h"
 
-    ATOMIC(struct ALcontextProps*) next;
-};
+enum class DistanceModel;
+
 
 struct ALlistenerProps {
-    ALfloat Position[3];
-    ALfloat Velocity[3];
-    ALfloat Forward[3];
-    ALfloat Up[3];
+    std::array<ALfloat,3> Position;
+    std::array<ALfloat,3> Velocity;
+    std::array<ALfloat,3> OrientAt;
+    std::array<ALfloat,3> OrientUp;
     ALfloat Gain;
 
-    ATOMIC(struct ALlistenerProps*) next;
+    std::atomic<ALlistenerProps*> next;
 };
 
-typedef struct ALlistener {
-    alignas(16) ALfloat Position[3];
-    ALfloat Velocity[3];
-    ALfloat Forward[3];
-    ALfloat Up[3];
-    ALfloat Gain;
+struct ALlistener {
+    std::array<ALfloat,3> Position{{0.0f, 0.0f, 0.0f}};
+    std::array<ALfloat,3> Velocity{{0.0f, 0.0f, 0.0f}};
+    std::array<ALfloat,3> OrientAt{{0.0f, 0.0f, -1.0f}};
+    std::array<ALfloat,3> OrientUp{{0.0f, 1.0f, 0.0f}};
+    ALfloat Gain{1.0f};
 
-    ATOMIC_FLAG PropsClean;
+    std::atomic_flag PropsClean;
 
     /* Pointer to the most recent property values that are awaiting an update.
      */
-    ATOMIC(struct ALlistenerProps*) Update;
+    std::atomic<ALlistenerProps*> Update{nullptr};
 
     struct {
-        aluMatrixf Matrix;
-        aluVector  Velocity;
+        alu::Matrix Matrix;
+        alu::Vector Velocity;
 
         ALfloat Gain;
         ALfloat MetersPerUnit;
@@ -54,14 +48,12 @@ typedef struct ALlistener {
         ALfloat ReverbSpeedOfSound; /* in meters per sec! */
 
         ALboolean SourceDistanceModel;
-        enum DistanceModel DistanceModel;
+        DistanceModel mDistanceModel;
     } Params;
-} ALlistener;
+
+    ALlistener() { PropsClean.test_and_set(std::memory_order_relaxed); }
+};
 
 void UpdateListenerProps(ALCcontext *context);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

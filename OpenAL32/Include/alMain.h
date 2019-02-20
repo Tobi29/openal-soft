@@ -16,68 +16,31 @@
 #include <intrin.h>
 #endif
 
+#include <array>
+#include <vector>
+#include <string>
+#include <chrono>
+#include <algorithm>
+
 #include "AL/al.h"
 #include "AL/alc.h"
 #include "AL/alext.h"
 
 #include "inprogext.h"
-#include "logging.h"
-#include "polymorphism.h"
-#include "static_assert.h"
-#include "align.h"
 #include "atomic.h"
 #include "vector.h"
-#include "alstring.h"
 #include "almalloc.h"
+#include "alnumeric.h"
 #include "threads.h"
+#include "ambidefs.h"
+#include "opthelpers.h"
 
 
-#if defined(_WIN64)
-#define SZFMT "%I64u"
-#elif defined(_WIN32)
-#define SZFMT "%u"
-#else
-#define SZFMT "%zu"
-#endif
+template<typename T, size_t N>
+constexpr inline size_t countof(const T(&)[N]) noexcept
+{ return N; }
+#define COUNTOF countof
 
-#ifdef __has_builtin
-#define HAS_BUILTIN __has_builtin
-#else
-#define HAS_BUILTIN(x) (0)
-#endif
-
-#ifdef __GNUC__
-/* LIKELY optimizes the case where the condition is true. The condition is not
- * required to be true, but it can result in more optimal code for the true
- * path at the expense of a less optimal false path.
- */
-#define LIKELY(x) __builtin_expect(!!(x), !0)
-/* The opposite of LIKELY, optimizing the case where the condition is false. */
-#define UNLIKELY(x) __builtin_expect(!!(x), 0)
-/* Unlike LIKELY, ASSUME requires the condition to be true or else it invokes
- * undefined behavior. It's essentially an assert without actually checking the
- * condition at run-time, allowing for stronger optimizations than LIKELY.
- */
-#if HAS_BUILTIN(__builtin_assume)
-#define ASSUME __builtin_assume
-#else
-#define ASSUME(x) do { if(!(x)) __builtin_unreachable(); } while(0)
-#endif
-
-#else
-
-#define LIKELY(x) (!!(x))
-#define UNLIKELY(x) (!!(x))
-#ifdef _MSC_VER
-#define ASSUME __assume
-#else
-#define ASSUME(x) ((void)0)
-#endif
-#endif
-
-#ifndef UINT64_MAX
-#define UINT64_MAX U64(18446744073709551615)
-#endif
 
 #ifndef UNUSED
 #if defined(__cplusplus)
@@ -91,54 +54,40 @@
 #endif
 #endif
 
-/* Calculates the size of a struct with N elements of a flexible array member.
- * GCC and Clang allow offsetof(Type, fam[N]) for this, but MSVC seems to have
- * trouble, so a bit more verbose workaround is needed.
- */
-#define FAM_SIZE(T, M, N)  (offsetof(T, M) + sizeof(((T*)NULL)->M[0])*(N))
 
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef ALint64SOFT ALint64;
-typedef ALuint64SOFT ALuint64;
-
-#ifndef U64
-#if defined(_MSC_VER)
-#define U64(x) ((ALuint64)(x##ui64))
-#elif SIZEOF_LONG == 8
-#define U64(x) ((ALuint64)(x##ul))
-#elif SIZEOF_LONG_LONG == 8
-#define U64(x) ((ALuint64)(x##ull))
-#endif
-#endif
-
-#ifndef I64
-#if defined(_MSC_VER)
-#define I64(x) ((ALint64)(x##i64))
-#elif SIZEOF_LONG == 8
-#define I64(x) ((ALint64)(x##l))
-#elif SIZEOF_LONG_LONG == 8
-#define I64(x) ((ALint64)(x##ll))
-#endif
-#endif
-
-/* Define a CTZ64 macro (count trailing zeros, for 64-bit integers). The result
- * is *UNDEFINED* if the value is 0.
+/* Define CTZ macros (count trailing zeros), and POPCNT macros (population
+ * count/count 1 bits), for 32- and 64-bit integers. The CTZ macros' results
+ * are *UNDEFINED* if the value is 0.
  */
 #ifdef __GNUC__
 
+#define POPCNT32 __builtin_popcount
+#define CTZ32 __builtin_ctz
 #if SIZEOF_LONG == 8
+#define POPCNT64 __builtin_popcountl
 #define CTZ64 __builtin_ctzl
 #else
+#define POPCNT64 __builtin_popcountll
 #define CTZ64 __builtin_ctzll
 #endif
 
 #elif defined(HAVE_BITSCANFORWARD64_INTRINSIC)
 
-inline int msvc64_ctz64(ALuint64 v)
+inline int msvc64_popcnt32(ALuint v)
+{ return (int)__popcnt(v); }
+#define POPCNT32 msvc64_popcnt32
+inline int msvc64_ctz32(ALuint v)
+{
+    unsigned long idx = 32;
+    _BitScanForward(&idx, v);
+    return (int)idx;
+}
+#define CTZ32 msvc64_ctz32
+
+inline int msvc64_popcnt64(uint64_t v)
+{ return (int)__popcnt64(v); }
+#define POPCNT64 msvc64_popcnt64
+inline int msvc64_ctz64(uint64_t v)
 {
     unsigned long idx = 64;
     _BitScanForward64(&idx, v);
@@ -148,7 +97,21 @@ inline int msvc64_ctz64(ALuint64 v)
 
 #elif defined(HAVE_BITSCANFORWARD_INTRINSIC)
 
-inline int msvc_ctz64(ALuint64 v)
+inline int msvc_popcnt32(ALuint v)
+{ return (int)__popcnt(v); }
+#define POPCNT32 msvc_popcnt32
+inline int msvc_ctz32(ALuint v)
+{
+    unsigned long idx = 32;
+    _BitScanForward(&idx, v);
+    return (int)idx;
+}
+#define CTZ32 msvc_ctz32
+
+inline int msvc_popcnt64(uint64_t v)
+{ return (int)(__popcnt((ALuint)v) + __popcnt((ALuint)(v>>32))); }
+#define POPCNT64 msvc_popcnt64
+inline int msvc_ctz64(uint64_t v)
 {
     unsigned long idx = 64;
     if(!_BitScanForward(&idx, v&0xffffffff))
@@ -162,25 +125,35 @@ inline int msvc_ctz64(ALuint64 v)
 
 #else
 
-/* There be black magics here. The popcnt64 method is derived from
+/* There be black magics here. The popcnt method is derived from
  * https://graphics.stanford.edu/~seander/bithacks.html#CountBitsSetParallel
  * while the ctz-utilizing-popcnt algorithm is shown here
  * http://www.hackersdelight.org/hdcodetxt/ntz.c.txt
  * as the ntz2 variant. These likely aren't the most efficient methods, but
  * they're good enough if the GCC or MSVC intrinsics aren't available.
  */
-inline int fallback_popcnt64(ALuint64 v)
+inline int fallback_popcnt32(ALuint v)
 {
-    v = v - ((v >> 1) & U64(0x5555555555555555));
-    v = (v & U64(0x3333333333333333)) + ((v >> 2) & U64(0x3333333333333333));
-    v = (v + (v >> 4)) & U64(0x0f0f0f0f0f0f0f0f);
-    return (int)((v * U64(0x0101010101010101)) >> 56);
+    v = v - ((v >> 1) & 0x55555555u);
+    v = (v & 0x33333333u) + ((v >> 2) & 0x33333333u);
+    v = (v + (v >> 4)) & 0x0f0f0f0fu;
+    return (int)((v * 0x01010101u) >> 24);
 }
+#define POPCNT32 fallback_popcnt32
+inline int fallback_ctz32(ALuint value)
+{ return fallback_popcnt32(~value & (value - 1)); }
+#define CTZ32 fallback_ctz32
 
-inline int fallback_ctz64(ALuint64 value)
+inline int fallback_popcnt64(uint64_t v)
 {
-    return fallback_popcnt64(~value & (value - 1));
+    v = v - ((v >> 1) & 0x5555555555555555_u64);
+    v = (v & 0x3333333333333333_u64) + ((v >> 2) & 0x3333333333333333_u64);
+    v = (v + (v >> 4)) & 0x0f0f0f0f0f0f0f0f_u64;
+    return (int)((v * 0x0101010101010101_u64) >> 56);
 }
+#define POPCNT64 fallback_popcnt64
+inline int fallback_ctz64(uint64_t value)
+{ return fallback_popcnt64(~value & (value - 1)); }
 #define CTZ64 fallback_ctz64
 #endif
 
@@ -194,58 +167,36 @@ static const union {
 #define IS_LITTLE_ENDIAN (EndianTest.b[0] == 1)
 #endif
 
-#define COUNTOF(x) (sizeof(x) / sizeof(0[x]))
 
-
-struct ll_ringbuffer;
-struct Hrtf;
 struct HrtfEntry;
+struct HrtfHandle;
+struct EnumeratedHrtf;
 struct DirectHrtfState;
 struct FrontStablizer;
 struct Compressor;
-struct ALCbackend;
+struct BackendBase;
 struct ALbuffer;
 struct ALeffect;
 struct ALfilter;
-struct ALsource;
-struct ALcontextProps;
-struct ALlistenerProps;
-struct ALvoiceProps;
-struct ALeffectslotProps;
+struct EffectState;
+struct Uhj2Encoder;
+class BFormatDec;
+class AmbiUpsampler;
+struct bs2b;
 
 
+#define DEFAULT_UPDATE_SIZE  (1024)
+#define DEFAULT_NUM_UPDATES  (3)
 #define DEFAULT_OUTPUT_RATE  (44100)
 #define MIN_OUTPUT_RATE      (8000)
 
-
-/* Find the next power-of-2 for non-power-of-2 numbers. */
-inline ALuint NextPowerOf2(ALuint value)
-{
-    if(value > 0)
-    {
-        value--;
-        value |= value>>1;
-        value |= value>>2;
-        value |= value>>4;
-        value |= value>>8;
-        value |= value>>16;
-    }
-    return value+1;
-}
-
-/** Round up a value to the next multiple. */
-inline size_t RoundUp(size_t value, size_t r)
-{
-    value += r-1;
-    return value - (value%r);
-}
 
 /* Fast float-to-int conversion. No particular rounding mode is assumed; the
  * IEEE-754 default is round-to-nearest with ties-to-even, though an app could
  * change it on its own threads. On some systems, a truncating conversion may
  * always be the fastest method.
  */
-inline ALint fastf2i(ALfloat f)
+inline ALint fastf2i(ALfloat f) noexcept
 {
 #if defined(HAVE_INTRIN_H) && ((defined(_M_IX86_FP) && (_M_IX86_FP > 0)) || defined(_M_X64))
     return _mm_cvt_ss2si(_mm_set1_ps(f));
@@ -272,7 +223,7 @@ inline ALint fastf2i(ALfloat f)
      * libc call, while MSVC's implementation is horribly slow, so always fall
      * back to a normal integer conversion for them.
      */
-#elif defined(HAVE_LRINTF) && !defined(_MSC_VER) && !defined(__clang__)
+#elif !defined(_MSC_VER) && !defined(__clang__)
 
     return lrintf(f);
 
@@ -283,7 +234,7 @@ inline ALint fastf2i(ALfloat f)
 }
 
 /* Converts float-to-int using standard behavior (truncation). */
-inline int float2int(float f)
+inline int float2int(float f) noexcept
 {
 #if ((defined(__GNUC__) || defined(__clang__)) && (defined(__i386__) || defined(__x86_64__)) && \
      !defined(__SSE_MATH__)) || (defined(_MSC_VER) && defined(_M_IX86_FP) && _M_IX86_FP == 0)
@@ -308,7 +259,7 @@ inline int float2int(float f)
 
 #else
 
-    return (ALint)f;
+    return static_cast<ALint>(f);
 #endif
 }
 
@@ -316,7 +267,7 @@ inline int float2int(float f)
  * rounding mode. This is essentially an inlined version of rintf, although
  * makes fewer promises (e.g. -0 or -0.25 rounded to 0 may result in +0).
  */
-inline float fast_roundf(float f)
+inline float fast_roundf(float f) noexcept
 {
 #if (defined(__GNUC__) || defined(__clang__)) && (defined(__i386__) || defined(__x86_64__)) && \
     !defined(__SSE_MATH__)
@@ -372,18 +323,6 @@ enum DevProbe {
     CAPTURE_DEVICE_PROBE
 };
 
-
-enum DistanceModel {
-    InverseDistanceClamped  = AL_INVERSE_DISTANCE_CLAMPED,
-    LinearDistanceClamped   = AL_LINEAR_DISTANCE_CLAMPED,
-    ExponentDistanceClamped = AL_EXPONENT_DISTANCE_CLAMPED,
-    InverseDistance  = AL_INVERSE_DISTANCE,
-    LinearDistance   = AL_LINEAR_DISTANCE,
-    ExponentDistance = AL_EXPONENT_DISTANCE,
-    DisableDistance  = AL_NONE,
-
-    DefaultDistanceModel = InverseDistanceClamped
-};
 
 enum Channel {
     FrontLeft = 0,
@@ -454,26 +393,44 @@ enum DevFmtChannels {
 };
 #define MAX_OUTPUT_CHANNELS  (16)
 
-ALsizei BytesFromDevFmt(enum DevFmtType type);
-ALsizei ChannelsFromDevFmt(enum DevFmtChannels chans, ALsizei ambiorder);
-inline ALsizei FrameSizeFromDevFmt(enum DevFmtChannels chans, enum DevFmtType type, ALsizei ambiorder)
-{
-    return ChannelsFromDevFmt(chans, ambiorder) * BytesFromDevFmt(type);
-}
+/* DevFmtType traits, providing the type, etc given a DevFmtType. */
+template<DevFmtType T>
+struct DevFmtTypeTraits { };
 
-enum AmbiLayout {
-    AmbiLayout_FuMa = ALC_FUMA_SOFT, /* FuMa channel order */
-    AmbiLayout_ACN = ALC_ACN_SOFT,   /* ACN channel order */
+template<>
+struct DevFmtTypeTraits<DevFmtByte> { using Type = ALbyte; };
+template<>
+struct DevFmtTypeTraits<DevFmtUByte> { using Type = ALubyte; };
+template<>
+struct DevFmtTypeTraits<DevFmtShort> { using Type = ALshort; };
+template<>
+struct DevFmtTypeTraits<DevFmtUShort> { using Type = ALushort; };
+template<>
+struct DevFmtTypeTraits<DevFmtInt> { using Type = ALint; };
+template<>
+struct DevFmtTypeTraits<DevFmtUInt> { using Type = ALuint; };
+template<>
+struct DevFmtTypeTraits<DevFmtFloat> { using Type = ALfloat; };
 
-    AmbiLayout_Default = AmbiLayout_ACN
+
+ALsizei BytesFromDevFmt(DevFmtType type) noexcept;
+ALsizei ChannelsFromDevFmt(DevFmtChannels chans, ALsizei ambiorder) noexcept;
+inline ALsizei FrameSizeFromDevFmt(DevFmtChannels chans, DevFmtType type, ALsizei ambiorder) noexcept
+{ return ChannelsFromDevFmt(chans, ambiorder) * BytesFromDevFmt(type); }
+
+enum class AmbiLayout {
+    FuMa = ALC_FUMA_SOFT, /* FuMa channel order */
+    ACN = ALC_ACN_SOFT,   /* ACN channel order */
+
+    Default = ACN
 };
 
-enum AmbiNorm {
-    AmbiNorm_FuMa = ALC_FUMA_SOFT, /* FuMa normalization */
-    AmbiNorm_SN3D = ALC_SN3D_SOFT, /* SN3D normalization */
-    AmbiNorm_N3D = ALC_N3D_SOFT,   /* N3D normalization */
+enum class AmbiNorm {
+    FuMa = ALC_FUMA_SOFT, /* FuMa normalization */
+    SN3D = ALC_SN3D_SOFT, /* SN3D normalization */
+    N3D = ALC_N3D_SOFT,   /* N3D normalization */
 
-    AmbiNorm_Default = AmbiNorm_SN3D
+    Default = SN3D
 };
 
 
@@ -491,89 +448,99 @@ enum RenderMode {
 };
 
 
-/* The maximum number of Ambisonics coefficients. For a given order (o), the
- * size needed will be (o+1)**2, thus zero-order has 1, first-order has 4,
- * second-order has 9, third-order has 16, and fourth-order has 25.
- */
-#define MAX_AMBI_ORDER  3
-#define MAX_AMBI_COEFFS ((MAX_AMBI_ORDER+1) * (MAX_AMBI_ORDER+1))
+struct BufferSubList {
+    uint64_t FreeMask{~0_u64};
+    ALbuffer *Buffers{nullptr}; /* 64 */
 
-/* A bitmask of ambisonic channels with height information. If none of these
- * channels are used/needed, there's no height (e.g. with most surround sound
- * speaker setups). This only specifies up to 4th order, which is the highest
- * order a 32-bit mask value can specify (a 64-bit mask could handle up to 7th
- * order). This is ACN ordering, with bit 0 being ACN 0, etc.
- */
-#define AMBI_PERIPHONIC_MASK (0xfe7ce4)
+    BufferSubList() noexcept = default;
+    BufferSubList(const BufferSubList&) = delete;
+    BufferSubList(BufferSubList&& rhs) noexcept : FreeMask{rhs.FreeMask}, Buffers{rhs.Buffers}
+    { rhs.FreeMask = ~0_u64; rhs.Buffers = nullptr; }
+    ~BufferSubList();
 
-/* The maximum number of Ambisonic coefficients for 2D (non-periphonic)
- * representation. This is 2 per each order above zero-order, plus 1 for zero-
- * order. Or simply, o*2 + 1.
- */
-#define MAX_AMBI2D_COEFFS (MAX_AMBI_ORDER*2 + 1)
+    BufferSubList& operator=(const BufferSubList&) = delete;
+    BufferSubList& operator=(BufferSubList&& rhs) noexcept
+    { std::swap(FreeMask, rhs.FreeMask); std::swap(Buffers, rhs.Buffers); return *this; }
+};
 
+struct EffectSubList {
+    uint64_t FreeMask{~0_u64};
+    ALeffect *Effects{nullptr}; /* 64 */
 
-typedef ALfloat ChannelConfig[MAX_AMBI_COEFFS];
-typedef struct BFChannelConfig {
-    ALfloat Scale;
-    ALsizei Index;
-} BFChannelConfig;
+    EffectSubList() noexcept = default;
+    EffectSubList(const EffectSubList&) = delete;
+    EffectSubList(EffectSubList&& rhs) noexcept : FreeMask{rhs.FreeMask}, Effects{rhs.Effects}
+    { rhs.FreeMask = ~0_u64; rhs.Effects = nullptr; }
+    ~EffectSubList();
 
-typedef union AmbiConfig {
-    /* Ambisonic coefficients for mixing to the dry buffer. */
-    ChannelConfig Coeffs[MAX_OUTPUT_CHANNELS];
-    /* Coefficient channel mapping for mixing to the dry buffer. */
-    BFChannelConfig Map[MAX_OUTPUT_CHANNELS];
-} AmbiConfig;
+    EffectSubList& operator=(const EffectSubList&) = delete;
+    EffectSubList& operator=(EffectSubList&& rhs) noexcept
+    { std::swap(FreeMask, rhs.FreeMask); std::swap(Effects, rhs.Effects); return *this; }
+};
 
+struct FilterSubList {
+    uint64_t FreeMask{~0_u64};
+    ALfilter *Filters{nullptr}; /* 64 */
 
-typedef struct BufferSubList {
-    ALuint64 FreeMask;
-    struct ALbuffer *Buffers; /* 64 */
-} BufferSubList;
-TYPEDEF_VECTOR(BufferSubList, vector_BufferSubList)
+    FilterSubList() noexcept = default;
+    FilterSubList(const FilterSubList&) = delete;
+    FilterSubList(FilterSubList&& rhs) noexcept : FreeMask{rhs.FreeMask}, Filters{rhs.Filters}
+    { rhs.FreeMask = ~0_u64; rhs.Filters = nullptr; }
+    ~FilterSubList();
 
-typedef struct EffectSubList {
-    ALuint64 FreeMask;
-    struct ALeffect *Effects; /* 64 */
-} EffectSubList;
-TYPEDEF_VECTOR(EffectSubList, vector_EffectSubList)
-
-typedef struct FilterSubList {
-    ALuint64 FreeMask;
-    struct ALfilter *Filters; /* 64 */
-} FilterSubList;
-TYPEDEF_VECTOR(FilterSubList, vector_FilterSubList)
-
-typedef struct SourceSubList {
-    ALuint64 FreeMask;
-    struct ALsource *Sources; /* 64 */
-} SourceSubList;
-TYPEDEF_VECTOR(SourceSubList, vector_SourceSubList)
-
-/* Effect slots are rather large, and apps aren't likely to have more than one
- * or two (let alone 64), so hold them individually.
- */
-typedef struct ALeffectslot *ALeffectslotPtr;
-TYPEDEF_VECTOR(ALeffectslotPtr, vector_ALeffectslotPtr)
-
-
-typedef struct EnumeratedHrtf {
-    al_string name;
-
-    struct HrtfEntry *hrtf;
-} EnumeratedHrtf;
-TYPEDEF_VECTOR(EnumeratedHrtf, vector_EnumeratedHrtf)
+    FilterSubList& operator=(const FilterSubList&) = delete;
+    FilterSubList& operator=(FilterSubList&& rhs) noexcept
+    { std::swap(FreeMask, rhs.FreeMask); std::swap(Filters, rhs.Filters); return *this; }
+};
 
 
 /* Maximum delay in samples for speaker distance compensation. */
 #define MAX_DELAY_LENGTH 1024
 
-typedef struct DistanceComp {
-    ALfloat Gain;
-    ALsizei Length; /* Valid range is [0...MAX_DELAY_LENGTH). */
-    ALfloat *Buffer;
-} DistanceComp;
+class DistanceComp {
+public:
+    struct DistData {
+        ALfloat Gain{1.0f};
+        ALsizei Length{0}; /* Valid range is [0...MAX_DELAY_LENGTH). */
+        ALfloat *Buffer{nullptr};
+    };
+
+private:
+    DistData mChannel[MAX_OUTPUT_CHANNELS];
+    al::vector<ALfloat,16> mSamples;
+
+public:
+    void resize(size_t new_size) { mSamples.resize(new_size); }
+    void shrink_to_fit() { mSamples.shrink_to_fit(); }
+    void clear() noexcept
+    {
+        for(auto &chan : mChannel)
+        {
+            chan.Gain = 1.0f;
+            chan.Length = 0;
+            chan.Buffer = nullptr;
+        }
+        mSamples.clear();
+    }
+
+    DistData *begin() noexcept { return std::begin(mChannel); }
+    const DistData *begin() const noexcept { return std::begin(mChannel); }
+    const DistData *cbegin() const noexcept { return std::begin(mChannel); }
+    DistData *end() noexcept { return std::end(mChannel); }
+    const DistData *end() const noexcept { return std::end(mChannel); }
+    const DistData *cend() const noexcept { return std::end(mChannel); }
+
+    ALfloat *data() noexcept { return mSamples.data(); }
+    const ALfloat *data() const noexcept { return mSamples.data(); }
+
+    DistData& operator[](size_t o) noexcept { return mChannel[o]; }
+    const DistData& operator[](size_t o) const noexcept { return mChannel[o]; }
+};
+
+struct BFChannelConfig {
+    ALfloat Scale;
+    ALsizei Index;
+};
 
 /* Size for temporary storage of buffer data, in ALfloats. Larger values need
  * more memory, while smaller values may need more iterations. The value needs
@@ -582,110 +549,97 @@ typedef struct DistanceComp {
  */
 #define BUFFERSIZE 2048
 
-typedef struct MixParams {
-    AmbiConfig Ambi;
-    /* Number of coefficients in each Ambi.Coeffs to mix together (4 for first-
-     * order, 9 for second-order, etc). If the count is 0, Ambi.Map is used
-     * instead to map each output to a coefficient index.
-     */
-    ALsizei CoeffCount;
+struct MixParams {
+    /* Coefficient channel mapping for mixing to the buffer. */
+    std::array<BFChannelConfig,MAX_OUTPUT_CHANNELS> AmbiMap;
 
-    ALfloat (*Buffer)[BUFFERSIZE];
-    ALsizei NumChannels;
-} MixParams;
+    ALfloat (*Buffer)[BUFFERSIZE]{nullptr};
+    ALsizei NumChannels{0};
+};
 
-typedef struct RealMixParams {
-    enum Channel ChannelName[MAX_OUTPUT_CHANNELS];
+struct RealMixParams {
+    Channel ChannelName[MAX_OUTPUT_CHANNELS]{};
 
-    ALfloat (*Buffer)[BUFFERSIZE];
-    ALsizei NumChannels;
-} RealMixParams;
+    ALfloat (*Buffer)[BUFFERSIZE]{nullptr};
+    ALsizei NumChannels{0};
+};
 
-typedef void (*POSTPROCESS)(ALCdevice *device, ALsizei SamplesToDo);
+using POSTPROCESS = void(*)(ALCdevice *device, const ALsizei SamplesToDo);
 
-struct ALCdevice_struct {
-    RefCount ref;
+struct ALCdevice {
+    RefCount ref{1u};
 
-    ATOMIC(ALenum) Connected;
-    enum DeviceType Type;
+    std::atomic<bool> Connected{true};
+    const DeviceType Type{};
 
-    ALuint Frequency;
-    ALuint UpdateSize;
-    ALuint NumUpdates;
-    enum DevFmtChannels FmtChans;
-    enum DevFmtType     FmtType;
-    ALboolean IsHeadphones;
-    ALsizei AmbiOrder;
+    ALuint Frequency{};
+    ALuint UpdateSize{};
+    ALuint NumUpdates{};
+    DevFmtChannels FmtChans{};
+    DevFmtType     FmtType{};
+    ALboolean IsHeadphones{AL_FALSE};
+    ALsizei mAmbiOrder{0};
     /* For DevFmtAmbi* output only, specifies the channel order and
      * normalization.
      */
-    enum AmbiLayout AmbiLayout;
-    enum AmbiNorm   AmbiScale;
+    AmbiLayout mAmbiLayout{AmbiLayout::Default};
+    AmbiNorm   mAmbiScale{AmbiNorm::Default};
 
-    ALCenum LimiterState;
+    ALCenum LimiterState{ALC_DONT_CARE_SOFT};
 
-    al_string DeviceName;
-
-    ATOMIC(ALCenum) LastError;
-
-    // Maximum number of sources that can be created
-    ALuint SourcesMax;
-    // Maximum number of slots that can be created
-    ALuint AuxiliaryEffectSlotMax;
-
-    ALCuint NumMonoSources;
-    ALCuint NumStereoSources;
-    ALsizei NumAuxSends;
-
-    // Map of Buffers for this device
-    vector_BufferSubList BufferList;
-    almtx_t BufferLock;
-
-    // Map of Effects for this device
-    vector_EffectSubList EffectList;
-    almtx_t EffectLock;
-
-    // Map of Filters for this device
-    vector_FilterSubList FilterList;
-    almtx_t FilterLock;
-
-    POSTPROCESS PostProcess;
-
-    /* HRTF state and info */
-    struct DirectHrtfState *Hrtf;
-    al_string HrtfName;
-    struct Hrtf *HrtfHandle;
-    vector_EnumeratedHrtf HrtfList;
-    ALCenum HrtfStatus;
-
-    /* UHJ encoder state */
-    struct Uhj2Encoder *Uhj_Encoder;
-
-    /* High quality Ambisonic decoder */
-    struct BFormatDec *AmbiDecoder;
-
-    /* Stereo-to-binaural filter */
-    struct bs2b *Bs2b;
-
-    /* First-order ambisonic upsampler for higher-order output */
-    struct AmbiUpsampler *AmbiUp;
-
-    /* Rendering mode. */
-    enum RenderMode Render_Mode;
+    std::string DeviceName;
 
     // Device flags
-    ALuint Flags;
+    ALuint Flags{0u};
 
-    ALuint64 ClockBase;
-    ALuint SamplesDone;
-    ALuint FixedLatency;
+    std::string HrtfName;
+    al::vector<EnumeratedHrtf> HrtfList;
+    ALCenum HrtfStatus{ALC_FALSE};
+
+    std::atomic<ALCenum> LastError{ALC_NO_ERROR};
+
+    // Maximum number of sources that can be created
+    ALuint SourcesMax{};
+    // Maximum number of slots that can be created
+    ALuint AuxiliaryEffectSlotMax{};
+
+    ALCuint NumMonoSources{};
+    ALCuint NumStereoSources{};
+    ALsizei NumAuxSends{};
+
+    // Map of Buffers for this device
+    std::mutex BufferLock;
+    al::vector<BufferSubList> BufferList;
+
+    // Map of Effects for this device
+    std::mutex EffectLock;
+    al::vector<EffectSubList> EffectList;
+
+    // Map of Filters for this device
+    std::mutex FilterLock;
+    al::vector<FilterSubList> FilterList;
+
+    /* Rendering mode. */
+    RenderMode mRenderMode{NormalRender};
+
+    /* The average speaker distance as determined by the ambdec configuration
+     * (or alternatively, by the NFC-HOA reference delay). Only used for NFC.
+     */
+    ALfloat AvgSpeakerDist{0.0f};
+
+    ALuint SamplesDone{0u};
+    std::chrono::nanoseconds ClockBase{0};
+    std::chrono::nanoseconds FixedLatency{0};
 
     /* Temp storage used for mixer processing. */
     alignas(16) ALfloat TempBuffer[4][BUFFERSIZE];
 
+    /* Mixing buffer used by the Dry mix, FOAOut, and Real out. */
+    al::vector<std::array<ALfloat,BUFFERSIZE>, 16> MixBuffer;
+
     /* The "dry" path corresponds to the main output. */
     MixParams Dry;
-    ALsizei NumChannelsPerOrder[MAX_AMBI_ORDER+1];
+    ALsizei NumChannelsPerOrder[MAX_AMBI_ORDER+1]{};
 
     /* First-order ambisonics output, to be upsampled to the dry buffer if different. */
     MixParams FOAOut;
@@ -695,36 +649,66 @@ struct ALCdevice_struct {
      */
     RealMixParams RealOut;
 
-    struct FrontStablizer *Stablizer;
+    /* HRTF state and info */
+    std::unique_ptr<DirectHrtfState> mHrtfState;
+    HrtfEntry *mHrtf{nullptr};
 
-    struct Compressor *Limiter;
+    /* UHJ encoder state */
+    std::unique_ptr<Uhj2Encoder> Uhj_Encoder;
 
-    /* The average speaker distance as determined by the ambdec configuration
-     * (or alternatively, by the NFC-HOA reference delay). Only used for NFC.
-     */
-    ALfloat AvgSpeakerDist;
+    /* High quality Ambisonic decoder */
+    std::unique_ptr<BFormatDec> AmbiDecoder;
+
+    /* Stereo-to-binaural filter */
+    std::unique_ptr<bs2b> Bs2b;
+
+    /* First-order ambisonic upsampler for higher-order output */
+    std::unique_ptr<AmbiUpsampler> AmbiUp;
+
+    POSTPROCESS PostProcess{};
+
+    std::unique_ptr<FrontStablizer> Stablizer;
+
+    std::unique_ptr<Compressor> Limiter;
 
     /* Delay buffers used to compensate for speaker distances. */
-    DistanceComp ChannelDelay[MAX_OUTPUT_CHANNELS];
+    DistanceComp ChannelDelay;
 
     /* Dithering control. */
-    ALfloat DitherDepth;
-    ALuint DitherSeed;
+    ALfloat DitherDepth{0.0f};
+    ALuint DitherSeed{0u};
 
     /* Running count of the mixer invocations, in 31.1 fixed point. This
      * actually increments *twice* when mixing, first at the start and then at
      * the end, so the bottom bit indicates if the device is currently mixing
      * and the upper bits indicates how many mixes have been done.
      */
-    RefCount MixCount;
+    RefCount MixCount{0u};
 
     // Contexts created on this device
-    ATOMIC(ALCcontext*) ContextList;
+    std::atomic<ALCcontext*> ContextList{nullptr};
 
-    almtx_t BackendLock;
-    struct ALCbackend *Backend;
+    /* This lock protects the device state (format, update size, etc) from
+     * being from being changed in multiple threads, or being accessed while
+     * being changed. It's also used to serialize calls to the backend.
+     */
+    std::mutex StateLock;
+    std::unique_ptr<BackendBase> Backend;
 
-    ATOMIC(ALCdevice*) next;
+    std::atomic<ALCdevice*> next{nullptr};
+
+
+    ALCdevice(DeviceType type);
+    ALCdevice(const ALCdevice&) = delete;
+    ALCdevice& operator=(const ALCdevice&) = delete;
+    ~ALCdevice();
+
+    ALsizei bytesFromFmt() const noexcept { return BytesFromDevFmt(FmtType); }
+    ALsizei channelsFromFmt() const noexcept { return ChannelsFromDevFmt(FmtChans, mAmbiOrder); }
+    ALsizei frameSizeFromFmt() const noexcept { return bytesFromFmt() * channelsFromFmt(); }
+
+    static constexpr inline const char *CurrentPrefix() noexcept { return "ALCdevice::"; }
+    DEF_NEWDEL(ALCdevice)
 };
 
 // Frequency was requested by the app or config file
@@ -739,10 +723,6 @@ struct ALCdevice_struct {
 
 // Specifies if the device is currently running
 #define DEVICE_RUNNING                           (1u<<31)
-
-
-/* Nanosecond resolution for the device clock time. */
-#define DEVICE_CLOCK_RES  U64(1000000000)
 
 
 /* Must be less than 15 characters (16 including terminating null) for
@@ -768,98 +748,31 @@ enum {
     EventType_ReleaseEffectState = 65536,
 };
 
-typedef struct AsyncEvent {
-    unsigned int EnumType;
+struct AsyncEvent {
+    unsigned int EnumType{0u};
     union {
         char dummy;
+        struct {
+            ALuint id;
+            ALenum state;
+        } srcstate;
+        struct {
+            ALuint id;
+            ALsizei count;
+        } bufcomp;
         struct {
             ALenum type;
             ALuint id;
             ALuint param;
             ALchar msg[1008];
         } user;
-        struct ALeffectState *EffectState;
-    } u;
-} AsyncEvent;
-#define ASYNC_EVENT(t) { t, { 0 } }
+        EffectState *mEffectState;
+    } u{};
 
-struct ALCcontext_struct {
-    RefCount ref;
-
-    struct ALlistener *Listener;
-
-    vector_SourceSubList SourceList;
-    ALuint NumSources;
-    almtx_t SourceLock;
-
-    vector_ALeffectslotPtr EffectSlotList;
-    almtx_t EffectSlotLock;
-
-    ATOMIC(ALenum) LastError;
-
-    enum DistanceModel DistanceModel;
-    ALboolean SourceDistanceModel;
-
-    ALfloat DopplerFactor;
-    ALfloat DopplerVelocity;
-    ALfloat SpeedOfSound;
-    ALfloat MetersPerUnit;
-
-    ATOMIC_FLAG PropsClean;
-    ATOMIC(ALenum) DeferUpdates;
-
-    almtx_t PropLock;
-
-    /* Counter for the pre-mixing updates, in 31.1 fixed point (lowest bit
-     * indicates if updates are currently happening).
-     */
-    RefCount UpdateCount;
-    ATOMIC(ALenum) HoldUpdates;
-
-    ALfloat GainBoost;
-
-    ATOMIC(struct ALcontextProps*) Update;
-
-    /* Linked lists of unused property containers, free to use for future
-     * updates.
-     */
-    ATOMIC(struct ALcontextProps*) FreeContextProps;
-    ATOMIC(struct ALlistenerProps*) FreeListenerProps;
-    ATOMIC(struct ALvoiceProps*) FreeVoiceProps;
-    ATOMIC(struct ALeffectslotProps*) FreeEffectslotProps;
-
-    struct ALvoice **Voices;
-    ALsizei VoiceCount;
-    ALsizei MaxVoices;
-
-    ATOMIC(struct ALeffectslotArray*) ActiveAuxSlots;
-
-    althrd_t EventThread;
-    alsem_t EventSem;
-    struct ll_ringbuffer *AsyncEvents;
-    ATOMIC(ALbitfieldSOFT) EnabledEvts;
-    almtx_t EventCbLock;
-    ALEVENTPROCSOFT EventCb;
-    void *EventParam;
-
-    /* Default effect slot */
-    struct ALeffectslot *DefaultSlot;
-
-    ALCdevice  *Device;
-    const ALCchar *ExtensionList;
-
-    ATOMIC(ALCcontext*) next;
-
-    /* Memory space used by the listener (and possibly default effect slot) */
-    alignas(16) ALCbyte _listener_mem[];
+    AsyncEvent() noexcept = default;
+    constexpr AsyncEvent(unsigned int type) noexcept : EnumType{type} { }
 };
 
-ALCcontext *GetContextRef(void);
-
-void ALCcontext_DecRef(ALCcontext *context);
-
-void ALCcontext_DeferUpdates(ALCcontext *context);
-void ALCcontext_ProcessUpdates(ALCcontext *context);
 
 void AllocateVoices(ALCcontext *context, ALsizei num_voices, ALsizei old_sends);
 
@@ -870,18 +783,14 @@ void SetRTPriority(void);
 void SetDefaultChannelOrder(ALCdevice *device);
 void SetDefaultWFXChannelOrder(ALCdevice *device);
 
-const ALCchar *DevFmtTypeString(enum DevFmtType type);
-const ALCchar *DevFmtChannelsString(enum DevFmtChannels chans);
+const ALCchar *DevFmtTypeString(DevFmtType type) noexcept;
+const ALCchar *DevFmtChannelsString(DevFmtChannels chans) noexcept;
 
-inline ALint GetChannelIndex(const enum Channel names[MAX_OUTPUT_CHANNELS], enum Channel chan)
+inline ALint GetChannelIndex(const Channel (&names)[MAX_OUTPUT_CHANNELS], Channel chan)
 {
-    ALint i;
-    for(i = 0;i < MAX_OUTPUT_CHANNELS;i++)
-    {
-        if(names[i] == chan)
-            return i;
-    }
-    return -1;
+    auto iter = std::find(std::begin(names), std::end(names), chan);
+    if(iter == std::end(names)) return -1;
+    return static_cast<ALint>(std::distance(std::begin(names), iter));
 }
 /**
  * GetChannelIdxByName
@@ -889,32 +798,14 @@ inline ALint GetChannelIndex(const enum Channel names[MAX_OUTPUT_CHANNELS], enum
  * Returns the index for the given channel name (e.g. FrontCenter), or -1 if it
  * doesn't exist.
  */
-inline ALint GetChannelIdxByName(const RealMixParams *real, enum Channel chan)
-{ return GetChannelIndex(real->ChannelName, chan); }
+inline ALint GetChannelIdxByName(const RealMixParams &real, Channel chan)
+{ return GetChannelIndex(real.ChannelName, chan); }
 
 
-inline void LockBufferList(ALCdevice *device) { almtx_lock(&device->BufferLock); }
-inline void UnlockBufferList(ALCdevice *device) { almtx_unlock(&device->BufferLock); }
-
-inline void LockEffectList(ALCdevice *device) { almtx_lock(&device->EffectLock); }
-inline void UnlockEffectList(ALCdevice *device) { almtx_unlock(&device->EffectLock); }
-
-inline void LockFilterList(ALCdevice *device) { almtx_lock(&device->FilterLock); }
-inline void UnlockFilterList(ALCdevice *device) { almtx_unlock(&device->FilterLock); }
-
-inline void LockEffectSlotList(ALCcontext *context)
-{ almtx_lock(&context->EffectSlotLock); }
-inline void UnlockEffectSlotList(ALCcontext *context)
-{ almtx_unlock(&context->EffectSlotLock); }
+void StartEventThrd(ALCcontext *ctx);
+void StopEventThrd(ALCcontext *ctx);
 
 
-int EventThread(void *arg);
-
-
-vector_al_string SearchDataFiles(const char *match, const char *subdir);
-
-#ifdef __cplusplus
-}
-#endif
+al::vector<std::string> SearchDataFiles(const char *match, const char *subdir);
 
 #endif

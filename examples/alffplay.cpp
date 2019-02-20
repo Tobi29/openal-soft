@@ -85,20 +85,23 @@ typedef void (AL_APIENTRY*LPALGETPOINTERVSOFT)(ALenum pname, void **values);
 
 namespace {
 
+inline constexpr int64_t operator "" _i64(unsigned long long int n) noexcept { return static_cast<int64_t>(n); }
+
 #ifndef M_PI
 #define M_PI (3.14159265358979323846)
 #endif
 
+using fixed32 = std::chrono::duration<int64_t,std::ratio<1,(1_i64<<32)>>;
 using nanoseconds = std::chrono::nanoseconds;
 using microseconds = std::chrono::microseconds;
 using milliseconds = std::chrono::milliseconds;
 using seconds = std::chrono::seconds;
 using seconds_d64 = std::chrono::duration<double>;
 
-const std::string AppName("alffplay");
+const std::string AppName{"alffplay"};
 
-bool EnableDirectOut = false;
-bool EnableWideStereo = false;
+bool EnableDirectOut{false};
+bool EnableWideStereo{false};
 LPALGETSOURCEI64VSOFT alGetSourcei64vSOFT;
 LPALCGETINTEGER64VSOFT alcGetInteger64vSOFT;
 
@@ -113,20 +116,20 @@ LPALEVENTCONTROLSOFT alEventControlSOFT;
 LPALEVENTCALLBACKSOFT alEventCallbackSOFT;
 #endif
 
-const seconds AVNoSyncThreshold(10);
+const seconds AVNoSyncThreshold{10};
 
 const milliseconds VideoSyncThreshold(10);
 #define VIDEO_PICTURE_QUEUE_SIZE 16
 
-const seconds_d64 AudioSyncThreshold(0.03);
-const milliseconds AudioSampleCorrectionMax(50);
+const seconds_d64 AudioSyncThreshold{0.03};
+const milliseconds AudioSampleCorrectionMax{50};
 /* Averaging filter coefficient for audio sync. */
 #define AUDIO_DIFF_AVG_NB 20
-const double AudioAvgFilterCoeff = std::pow(0.01, 1.0/AUDIO_DIFF_AVG_NB);
+const double AudioAvgFilterCoeff{std::pow(0.01, 1.0/AUDIO_DIFF_AVG_NB)};
 /* Per-buffer size, in time */
-const milliseconds AudioBufferTime(20);
+const milliseconds AudioBufferTime{20};
 /* Buffer total size, in time (should be divisible by the buffer time) */
-const milliseconds AudioBufferTotalTime(800);
+const milliseconds AudioBufferTotalTime{800};
 
 #define MAX_QUEUE_SIZE (15 * 1024 * 1024) /* Bytes of compressed data to keep queued */
 
@@ -146,7 +149,7 @@ enum class SyncMaster {
 
 
 inline microseconds get_avtime()
-{ return microseconds(av_gettime()); }
+{ return microseconds{av_gettime()}; }
 
 /* Define unique_ptrs to auto-cleanup associated ffmpeg objects. */
 struct AVIOContextDeleter {
@@ -286,7 +289,7 @@ struct AudioState {
     nanoseconds getClockNoLock();
     nanoseconds getClock()
     {
-        std::lock_guard<std::mutex> lock(mSrcMutex);
+        std::lock_guard<std::mutex> lock{mSrcMutex};
         return getClockNoLock();
     }
 
@@ -417,15 +420,15 @@ nanoseconds AudioState::getClockNoLock()
 
         // Get the current device clock time and latency.
         auto device = alcGetContextsDevice(alcGetCurrentContext());
-        ALCint64SOFT devtimes[2] = {0,0};
+        ALCint64SOFT devtimes[2]{0,0};
         alcGetInteger64vSOFT(device, ALC_DEVICE_CLOCK_LATENCY_SOFT, 2, devtimes);
-        auto latency = nanoseconds(devtimes[1]);
-        auto device_time = nanoseconds(devtimes[0]);
+        auto latency = nanoseconds{devtimes[1]};
+        auto device_time = nanoseconds{devtimes[0]};
 
         // The clock is simply the current device time relative to the recorded
         // start time. We can also subtract the latency to get more a accurate
         // position of where the audio device actually is in the output stream.
-        return device_time - mDeviceStartTime - latency;
+        std::max(device_time - mDeviceStartTime - latency, nanoseconds::zero());
     }
 
     /* The source-based clock is based on 4 components:
@@ -443,12 +446,10 @@ nanoseconds AudioState::getClockNoLock()
      * sample at OpenAL's current position, and subtracting the source latency
      * from that gives the timestamp of the sample currently at the DAC.
      */
-    nanoseconds pts = mCurrentPts;
+    nanoseconds pts{mCurrentPts};
     if(mSource)
     {
         ALint64SOFT offset[2];
-        ALint queued;
-        ALint status;
 
         /* NOTE: The source state must be checked last, in case an underrun
          * occurs and the source stops between retrieving the offset+latency
@@ -459,9 +460,10 @@ nanoseconds AudioState::getClockNoLock()
         {
             ALint ioffset;
             alGetSourcei(mSource, AL_SAMPLE_OFFSET, &ioffset);
-            offset[0] = (ALint64SOFT)ioffset << 32;
+            offset[0] = ALint64SOFT{ioffset} << 32;
             offset[1] = 0;
         }
+        ALint queued, status;
         alGetSourcei(mSource, AL_BUFFERS_QUEUED, &queued);
         alGetSourcei(mSource, AL_SOURCE_STATE, &status);
 
@@ -471,16 +473,13 @@ nanoseconds AudioState::getClockNoLock()
          * when it starts recovery. */
         if(status != AL_STOPPED)
         {
-            using fixed32 = std::chrono::duration<int64_t,std::ratio<1,(1ll<<32)>>;
-
             pts -= AudioBufferTime*queued;
             pts += std::chrono::duration_cast<nanoseconds>(
-                fixed32(offset[0] / mCodecCtx->sample_rate)
-            );
+                fixed32{offset[0] / mCodecCtx->sample_rate});
         }
         /* Don't offset by the latency if the source isn't playing. */
         if(status == AL_PLAYING)
-            pts -= nanoseconds(offset[1]);
+            pts -= nanoseconds{offset[1]};
     }
 
     return std::max(pts, nanoseconds::zero());
@@ -501,16 +500,14 @@ void AudioState::startPlayback()
     alSourcePlay(mSource);
     if(alcGetInteger64vSOFT)
     {
-        using fixed32 = std::chrono::duration<int64_t,std::ratio<1,(1ll<<32)>>;
-
         // Subtract the total buffer queue time from the current pts to get the
         // pts of the start of the queue.
-        nanoseconds startpts = mCurrentPts - AudioBufferTotalTime;
-        int64_t srctimes[2]={0,0};
+        nanoseconds startpts{mCurrentPts - AudioBufferTotalTime};
+        int64_t srctimes[2]{0,0};
         alGetSourcei64vSOFT(mSource, AL_SAMPLE_OFFSET_CLOCK_SOFT, srctimes);
-        auto device_time = nanoseconds(srctimes[1]);
-        auto src_offset = std::chrono::duration_cast<nanoseconds>(fixed32(srctimes[0])) /
-                          mCodecCtx->sample_rate;
+        auto device_time = nanoseconds{srctimes[1]};
+        auto src_offset = std::chrono::duration_cast<nanoseconds>(fixed32{srctimes[0]}) /
+            mCodecCtx->sample_rate;
 
         // The mixer may have ticked and incremented the device time and sample
         // offset, so subtract the source offset from the device time to get
@@ -545,7 +542,7 @@ int AudioState::getSync()
     /* Constrain the per-update difference to avoid exceedingly large skips */
     diff = std::min<nanoseconds>(std::max<nanoseconds>(diff, -AudioSampleCorrectionMax),
                                  AudioSampleCorrectionMax);
-    return (int)std::chrono::duration_cast<seconds>(diff*mCodecCtx->sample_rate).count();
+    return static_cast<int>(std::chrono::duration_cast<seconds>(diff*mCodecCtx->sample_rate).count());
 }
 
 int AudioState::decodeFrame()
@@ -596,9 +593,8 @@ int AudioState::decodeFrame()
             mSamplesMax = mDecodedFrame->nb_samples;
         }
         /* Return the amount of sample frames converted */
-        int data_size = swr_convert(mSwresCtx.get(), &mSamples, mDecodedFrame->nb_samples,
-            (const uint8_t**)mDecodedFrame->data, mDecodedFrame->nb_samples
-        );
+        int data_size{swr_convert(mSwresCtx.get(), &mSamples, mDecodedFrame->nb_samples,
+            const_cast<const uint8_t**>(mDecodedFrame->data), mDecodedFrame->nb_samples)};
 
         av_frame_unref(mDecodedFrame.get());
         return data_size;
@@ -772,40 +768,7 @@ int AudioState::handler()
 
     /* Find a suitable format for OpenAL. */
     mDstChanLayout = 0;
-    if(mCodecCtx->sample_fmt == AV_SAMPLE_FMT_U8 || mCodecCtx->sample_fmt == AV_SAMPLE_FMT_U8P)
-    {
-        mDstSampleFmt = AV_SAMPLE_FMT_U8;
-        mFrameSize = 1;
-        if(mCodecCtx->channel_layout == AV_CH_LAYOUT_7POINT1 &&
-           alIsExtensionPresent("AL_EXT_MCFORMATS") &&
-           (fmt=alGetEnumValue("AL_FORMAT_71CHN8")) != AL_NONE && fmt != -1)
-        {
-            mDstChanLayout = mCodecCtx->channel_layout;
-            mFrameSize *= 8;
-            mFormat = fmt;
-        }
-        if((mCodecCtx->channel_layout == AV_CH_LAYOUT_5POINT1 ||
-            mCodecCtx->channel_layout == AV_CH_LAYOUT_5POINT1_BACK) &&
-           alIsExtensionPresent("AL_EXT_MCFORMATS") &&
-           (fmt=alGetEnumValue("AL_FORMAT_51CHN8")) != AL_NONE && fmt != -1)
-        {
-            mDstChanLayout = mCodecCtx->channel_layout;
-            mFrameSize *= 6;
-            mFormat = fmt;
-        }
-        if(mCodecCtx->channel_layout == AV_CH_LAYOUT_MONO)
-        {
-            mDstChanLayout = mCodecCtx->channel_layout;
-            mFrameSize *= 1;
-            mFormat = AL_FORMAT_MONO8;
-        }
-        if(!mDstChanLayout)
-        {
-            mDstChanLayout = AV_CH_LAYOUT_STEREO;
-            mFrameSize *= 2;
-            mFormat = AL_FORMAT_STEREO8;
-        }
-    }
+    mFormat = AL_NONE;
     if((mCodecCtx->sample_fmt == AV_SAMPLE_FMT_FLT || mCodecCtx->sample_fmt == AV_SAMPLE_FMT_FLTP) &&
        alIsExtensionPresent("AL_EXT_FLOAT32"))
     {
@@ -834,14 +797,80 @@ int AudioState::handler()
             mFrameSize *= 1;
             mFormat = AL_FORMAT_MONO_FLOAT32;
         }
-        if(!mDstChanLayout)
+        /* Assume 3D B-Format (ambisonics) if the channel layout is blank and
+         * there's 4 or more channels. FFmpeg/libavcodec otherwise seems to
+         * have no way to specify if the source is actually B-Format (let alone
+         * if it's 2D or 3D).
+         */
+        if(mCodecCtx->channel_layout == 0 && mCodecCtx->channels >= 4 &&
+           alIsExtensionPresent("AL_EXT_BFORMAT") &&
+           (fmt=alGetEnumValue("AL_FORMAT_BFORMAT3D_FLOAT32")) != AL_NONE && fmt != -1)
+        {
+            int order{static_cast<int>(std::sqrt(mCodecCtx->channels)) - 1};
+            if((order+1)*(order+1) == mCodecCtx->channels ||
+               (order+1)*(order+1) + 2 == mCodecCtx->channels)
+            {
+                /* OpenAL only supports first-order with AL_EXT_BFORMAT, which
+                 * is 4 channels for 3D buffers.
+                 */
+                mFrameSize *= 4;
+                mFormat = fmt;
+            }
+        }
+        if(!mFormat)
         {
             mDstChanLayout = AV_CH_LAYOUT_STEREO;
             mFrameSize *= 2;
             mFormat = AL_FORMAT_STEREO_FLOAT32;
         }
     }
-    if(!mDstChanLayout)
+    if(mCodecCtx->sample_fmt == AV_SAMPLE_FMT_U8 || mCodecCtx->sample_fmt == AV_SAMPLE_FMT_U8P)
+    {
+        mDstSampleFmt = AV_SAMPLE_FMT_U8;
+        mFrameSize = 1;
+        if(mCodecCtx->channel_layout == AV_CH_LAYOUT_7POINT1 &&
+           alIsExtensionPresent("AL_EXT_MCFORMATS") &&
+           (fmt=alGetEnumValue("AL_FORMAT_71CHN8")) != AL_NONE && fmt != -1)
+        {
+            mDstChanLayout = mCodecCtx->channel_layout;
+            mFrameSize *= 8;
+            mFormat = fmt;
+        }
+        if((mCodecCtx->channel_layout == AV_CH_LAYOUT_5POINT1 ||
+            mCodecCtx->channel_layout == AV_CH_LAYOUT_5POINT1_BACK) &&
+           alIsExtensionPresent("AL_EXT_MCFORMATS") &&
+           (fmt=alGetEnumValue("AL_FORMAT_51CHN8")) != AL_NONE && fmt != -1)
+        {
+            mDstChanLayout = mCodecCtx->channel_layout;
+            mFrameSize *= 6;
+            mFormat = fmt;
+        }
+        if(mCodecCtx->channel_layout == AV_CH_LAYOUT_MONO)
+        {
+            mDstChanLayout = mCodecCtx->channel_layout;
+            mFrameSize *= 1;
+            mFormat = AL_FORMAT_MONO8;
+        }
+        if(mCodecCtx->channel_layout == 0 && mCodecCtx->channels >= 4 &&
+           alIsExtensionPresent("AL_EXT_BFORMAT") &&
+           (fmt=alGetEnumValue("AL_FORMAT_BFORMAT3D8")) != AL_NONE && fmt != -1)
+        {
+            int order{static_cast<int>(std::sqrt(mCodecCtx->channels)) - 1};
+            if((order+1)*(order+1) == mCodecCtx->channels ||
+               (order+1)*(order+1) + 2 == mCodecCtx->channels)
+            {
+                mFrameSize *= 4;
+                mFormat = fmt;
+            }
+        }
+        if(!mFormat)
+        {
+            mDstChanLayout = AV_CH_LAYOUT_STEREO;
+            mFrameSize *= 2;
+            mFormat = AL_FORMAT_STEREO8;
+        }
+    }
+    if(!mFormat)
     {
         mDstSampleFmt = AV_SAMPLE_FMT_S16;
         mFrameSize = 2;
@@ -868,7 +897,19 @@ int AudioState::handler()
             mFrameSize *= 1;
             mFormat = AL_FORMAT_MONO16;
         }
-        if(!mDstChanLayout)
+        if(mCodecCtx->channel_layout == 0 && mCodecCtx->channels >= 4 &&
+           alIsExtensionPresent("AL_EXT_BFORMAT") &&
+           (fmt=alGetEnumValue("AL_FORMAT_BFORMAT3D16")) != AL_NONE && fmt != -1)
+        {
+            int order{static_cast<int>(std::sqrt(mCodecCtx->channels)) - 1};
+            if((order+1)*(order+1) == mCodecCtx->channels ||
+               (order+1)*(order+1) + 2 == mCodecCtx->channels)
+            {
+                mFrameSize *= 4;
+                mFormat = fmt;
+            }
+        }
+        if(!mFormat)
         {
             mDstChanLayout = AV_CH_LAYOUT_STEREO;
             mFrameSize *= 2;
@@ -879,7 +920,7 @@ int AudioState::handler()
     ALsizei buffer_len = std::chrono::duration_cast<std::chrono::duration<int>>(
         mCodecCtx->sample_rate * AudioBufferTime).count() * mFrameSize;
 
-    mSamples = NULL;
+    mSamples = nullptr;
     mSamplesMax = 0;
     mSamplesPos = 0;
     mSamplesLen = 0;
@@ -891,13 +932,36 @@ int AudioState::handler()
         goto finish;
     }
 
-    mSwresCtx.reset(swr_alloc_set_opts(nullptr,
-        mDstChanLayout, mDstSampleFmt, mCodecCtx->sample_rate,
-        mCodecCtx->channel_layout ? mCodecCtx->channel_layout :
-            (uint64_t)av_get_default_channel_layout(mCodecCtx->channels),
-        mCodecCtx->sample_fmt, mCodecCtx->sample_rate,
-        0, nullptr
-    ));
+    if(!mDstChanLayout)
+    {
+        /* OpenAL only supports first-order ambisonics with AL_EXT_BFORMAT, so
+         * we have to drop any extra channels. It also only supports FuMa
+         * channel ordering and normalization, so a custom matrix is needed to
+         * scale and reorder the source from AmbiX.
+         */
+        mSwresCtx.reset(swr_alloc_set_opts(nullptr,
+            (1_i64<<4)-1, mDstSampleFmt, mCodecCtx->sample_rate,
+            (1_i64<<mCodecCtx->channels)-1, mCodecCtx->sample_fmt, mCodecCtx->sample_rate,
+            0, nullptr));
+
+        /* Note that ffmpeg/libavcodec has no method to check the ambisonic
+         * channel order and normalization, so we can only assume AmbiX as the
+         * defacto-standard. This is not true for .amb files, which use FuMa.
+         */
+        std::vector<double> mtx(64*64, 0.0);
+        mtx[0 + 0*64] = std::sqrt(0.5);
+        mtx[3 + 1*64] = 1.0;
+        mtx[1 + 2*64] = 1.0;
+        mtx[2 + 3*64] = 1.0;
+        swr_set_matrix(mSwresCtx.get(), mtx.data(), 64);
+    }
+    else
+        mSwresCtx.reset(swr_alloc_set_opts(nullptr,
+            mDstChanLayout, mDstSampleFmt, mCodecCtx->sample_rate,
+            mCodecCtx->channel_layout ? mCodecCtx->channel_layout :
+                static_cast<uint64_t>(av_get_default_channel_layout(mCodecCtx->channels)),
+            mCodecCtx->sample_fmt, mCodecCtx->sample_rate,
+            0, nullptr));
     if(!mSwresCtx || swr_init(mSwresCtx.get()) != 0)
     {
         std::cerr<< "Failed to initialize audio converter" <<std::endl;
@@ -910,9 +974,9 @@ int AudioState::handler()
 
     if(EnableDirectOut)
         alSourcei(mSource, AL_DIRECT_CHANNELS_SOFT, AL_TRUE);
-    if(EnableWideStereo)
-    {
-        ALfloat angles[2] = { (ALfloat)(M_PI/3.0), (ALfloat)(-M_PI/3.0) };
+    if (EnableWideStereo) {
+        ALfloat angles[2] = {static_cast<ALfloat>(M_PI / 3.0),
+                             static_cast<ALfloat>(-M_PI / 3.0)};
         alSourcefv(mSource, AL_STEREO_ANGLES, angles);
     }
 
@@ -952,7 +1016,7 @@ int AudioState::handler()
         /* Refill the buffer queue. */
         ALint queued;
         alGetSourcei(mSource, AL_BUFFERS_QUEUED, &queued);
-        while((ALuint)queued < mBuffers.size())
+        while(static_cast<ALuint>(queued) < mBuffers.size())
         {
             ALuint bufid = mBuffers[mBufferIdx];
 
@@ -992,6 +1056,16 @@ int AudioState::handler()
              */
             alSourceRewind(mSource);
             alSourcei(mSource, AL_BUFFER, 0);
+            if(alcGetInteger64vSOFT)
+            {
+                /* Also update the device start time with the current device
+                 * clock, so the decoder knows we're running behind.
+                 */
+                int64_t devtime{};
+                alcGetInteger64vSOFT(alcGetContextsDevice(alcGetCurrentContext()),
+                    ALC_DEVICE_CLOCK_SOFT, 1, &devtime);
+                mDeviceStartTime = nanoseconds{devtime} - mCurrentPts;
+            }
             continue;
         }
 
@@ -1069,15 +1143,15 @@ void VideoState::display(SDL_Window *screen, SDL_Renderer *renderer)
                        mCodecCtx->height;
     }
     if(aspect_ratio <= 0.0f)
-        aspect_ratio = (float)mCodecCtx->width / (float)mCodecCtx->height;
+        aspect_ratio = static_cast<float>(mCodecCtx->width) / static_cast<float>(mCodecCtx->height);
 
     SDL_GetWindowSize(screen, &win_w, &win_h);
     h = win_h;
-    w = ((int)rint(h * aspect_ratio) + 3) & ~3;
+    w = (static_cast<int>(rint(h * aspect_ratio)) + 3) & ~3;
     if(w > win_w)
     {
         w = win_w;
-        h = ((int)rint(w / aspect_ratio) + 3) & ~3;
+        h = (static_cast<int>(rint(w / aspect_ratio)) + 3) & ~3;
     }
     x = (win_w - w) / 2;
     y = (win_h - h) / 2;
@@ -1213,9 +1287,9 @@ void VideoState::updatePicture(SDL_Window *screen, SDL_Renderer *renderer)
             {
                 double aspect_ratio = av_q2d(mCodecCtx->sample_aspect_ratio);
                 if(aspect_ratio >= 1.0)
-                    w = (int)(w*aspect_ratio + 0.5);
+                    w = static_cast<int>(w*aspect_ratio + 0.5);
                 else if(aspect_ratio > 0.0)
-                    h = (int)(h/aspect_ratio + 0.5);
+                    h = static_cast<int>(h/aspect_ratio + 0.5);
             }
             SDL_SetWindowSize(screen, w, h);
         }
@@ -1262,7 +1336,7 @@ void VideoState::updatePicture(SDL_Window *screen, SDL_Renderer *renderer)
             pict_linesize[1] = pitch / 2;
             pict_linesize[2] = pitch / 2;
 
-            sws_scale(mSwscaleCtx.get(), (const uint8_t**)frame->data,
+            sws_scale(mSwscaleCtx.get(), reinterpret_cast<uint8_t**>(frame->data),
                       frame->linesize, 0, h, pict_data, pict_linesize);
             SDL_UnlockTexture(vp->mImage);
         }
@@ -1446,7 +1520,7 @@ nanoseconds MovieState::getDuration()
 
 int MovieState::streamComponentOpen(int stream_index)
 {
-    if(stream_index < 0 || (unsigned int)stream_index >= mFormatCtx->nb_streams)
+    if(stream_index < 0 || static_cast<unsigned int>(stream_index) >= mFormatCtx->nb_streams)
         return -1;
 
     /* Get a pointer to the codec context for the stream, and open the

@@ -4,139 +4,102 @@
 #include "alMain.h"
 #include "alEffect.h"
 
+#include "almalloc.h"
 #include "atomic.h"
-#include "align.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
-struct ALeffectStateVtable;
 struct ALeffectslot;
 
-typedef struct ALeffectState {
-    RefCount Ref;
-    const struct ALeffectStateVtable *vtbl;
-
-    ALfloat (*OutBuffer)[BUFFERSIZE];
-    ALsizei OutChannels;
-} ALeffectState;
-
-void ALeffectState_Construct(ALeffectState *state);
-void ALeffectState_Destruct(ALeffectState *state);
-
-struct ALeffectStateVtable {
-    void (*const Destruct)(ALeffectState *state);
-
-    ALboolean (*const deviceUpdate)(ALeffectState *state, ALCdevice *device);
-    void (*const update)(ALeffectState *state, const ALCcontext *context, const struct ALeffectslot *slot, const union ALeffectProps *props);
-    void (*const process)(ALeffectState *state, ALsizei samplesToDo, const ALfloat (*restrict samplesIn)[BUFFERSIZE], ALfloat (*restrict samplesOut)[BUFFERSIZE], ALsizei numChannels);
-
-    void (*const Delete)(void *ptr);
+struct EffectTarget {
+    MixParams *Main;
+    MixParams *FOAOut;
+    RealMixParams *RealOut;
 };
 
-/* Small hack to use a pointer-to-array types as a normal argument type.
- * Shouldn't be used directly.
- */
-typedef ALfloat ALfloatBUFFERSIZE[BUFFERSIZE];
+struct EffectState {
+    RefCount mRef{1u};
 
-#define DEFINE_ALEFFECTSTATE_VTABLE(T)                                        \
-DECLARE_THUNK(T, ALeffectState, void, Destruct)                               \
-DECLARE_THUNK1(T, ALeffectState, ALboolean, deviceUpdate, ALCdevice*)         \
-DECLARE_THUNK3(T, ALeffectState, void, update, const ALCcontext*, const ALeffectslot*, const ALeffectProps*) \
-DECLARE_THUNK4(T, ALeffectState, void, process, ALsizei, const ALfloatBUFFERSIZE*restrict, ALfloatBUFFERSIZE*restrict, ALsizei) \
-static void T##_ALeffectState_Delete(void *ptr)                               \
-{ return T##_Delete(STATIC_UPCAST(T, ALeffectState, (ALeffectState*)ptr)); }  \
-                                                                              \
-static const struct ALeffectStateVtable T##_ALeffectState_vtable = {          \
-    T##_ALeffectState_Destruct,                                               \
-                                                                              \
-    T##_ALeffectState_deviceUpdate,                                           \
-    T##_ALeffectState_update,                                                 \
-    T##_ALeffectState_process,                                                \
-                                                                              \
-    T##_ALeffectState_Delete,                                                 \
-}
+    ALfloat (*mOutBuffer)[BUFFERSIZE]{nullptr};
+    ALsizei mOutChannels{0};
 
 
-struct EffectStateFactoryVtable;
+    virtual ~EffectState() = default;
 
-typedef struct EffectStateFactory {
-    const struct EffectStateFactoryVtable *vtab;
-} EffectStateFactory;
+    virtual ALboolean deviceUpdate(const ALCdevice *device) = 0;
+    virtual void update(const ALCcontext *context, const ALeffectslot *slot, const ALeffectProps *props, const EffectTarget target) = 0;
+    virtual void process(ALsizei samplesToDo, const ALfloat (*RESTRICT samplesIn)[BUFFERSIZE], ALfloat (*RESTRICT samplesOut)[BUFFERSIZE], ALsizei numChannels) = 0;
 
-struct EffectStateFactoryVtable {
-    ALeffectState *(*const create)(EffectStateFactory *factory);
+    void IncRef() noexcept;
+    void DecRef() noexcept;
 };
-#define EffectStateFactory_create(x) ((x)->vtab->create((x)))
 
-#define DEFINE_EFFECTSTATEFACTORY_VTABLE(T)                                   \
-DECLARE_THUNK(T, EffectStateFactory, ALeffectState*, create)                  \
-                                                                              \
-static const struct EffectStateFactoryVtable T##_EffectStateFactory_vtable = { \
-    T##_EffectStateFactory_create,                                            \
-}
+
+struct EffectStateFactory {
+    virtual ~EffectStateFactory() { }
+
+    virtual EffectState *create() = 0;
+};
 
 
 #define MAX_EFFECT_CHANNELS (4)
 
 
-struct ALeffectslotArray {
-    ALsizei count;
-    struct ALeffectslot *slot[];
-};
+using ALeffectslotArray = al::FlexArray<ALeffectslot*>;
 
 
 struct ALeffectslotProps {
     ALfloat   Gain;
     ALboolean AuxSendAuto;
+    ALeffectslot *Target;
 
     ALenum Type;
     ALeffectProps Props;
 
-    ALeffectState *State;
+    EffectState *State;
 
-    ATOMIC(struct ALeffectslotProps*) next;
+    std::atomic<ALeffectslotProps*> next;
 };
 
 
-typedef struct ALeffectslot {
-    ALfloat   Gain;
-    ALboolean AuxSendAuto;
+struct ALeffectslot {
+    ALfloat   Gain{1.0f};
+    ALboolean AuxSendAuto{AL_TRUE};
+    ALeffectslot *Target{nullptr};
 
     struct {
-        ALenum Type;
-        ALeffectProps Props;
+        ALenum Type{AL_EFFECT_NULL};
+        ALeffectProps Props{};
 
-        ALeffectState *State;
+        EffectState *State{nullptr};
     } Effect;
 
-    ATOMIC_FLAG PropsClean;
+    std::atomic_flag PropsClean;
 
-    RefCount ref;
+    RefCount ref{0u};
 
-    ATOMIC(struct ALeffectslotProps*) Update;
+    std::atomic<ALeffectslotProps*> Update{nullptr};
 
     struct {
-        ALfloat   Gain;
-        ALboolean AuxSendAuto;
+        ALfloat   Gain{1.0f};
+        ALboolean AuxSendAuto{AL_TRUE};
+        ALeffectslot *Target{nullptr};
 
-        ALenum EffectType;
-        ALeffectProps EffectProps;
-        ALeffectState *EffectState;
+        ALenum EffectType{AL_EFFECT_NULL};
+        ALeffectProps EffectProps{};
+        EffectState *mEffectState{nullptr};
 
-        ALfloat RoomRolloff; /* Added to the source's room rolloff, not multiplied. */
-        ALfloat DecayTime;
-        ALfloat DecayLFRatio;
-        ALfloat DecayHFRatio;
-        ALboolean DecayHFLimit;
-        ALfloat AirAbsorptionGainHF;
+        ALfloat RoomRolloff{0.0f}; /* Added to the source's room rolloff, not multiplied. */
+        ALfloat DecayTime{0.0f};
+        ALfloat DecayLFRatio{0.0f};
+        ALfloat DecayHFRatio{0.0f};
+        ALboolean DecayHFLimit{AL_FALSE};
+        ALfloat AirAbsorptionGainHF{1.0f};
     } Params;
 
     /* Self ID */
-    ALuint id;
+    ALuint id{};
 
-    ALsizei NumChannels;
+    ALsizei NumChannels{};
     BFChannelConfig ChanMap[MAX_EFFECT_CHANNELS];
     /* Wet buffer configuration is ACN channel order with N3D scaling:
      * * Channel 0 is the unattenuated mono signal.
@@ -149,13 +112,20 @@ typedef struct ALeffectslot {
      * output (FOAOut).
      */
     alignas(16) ALfloat WetBuffer[MAX_EFFECT_CHANNELS][BUFFERSIZE];
-} ALeffectslot;
+
+    ALeffectslot() { PropsClean.test_and_set(std::memory_order_relaxed); }
+    ALeffectslot(const ALeffectslot&) = delete;
+    ALeffectslot& operator=(const ALeffectslot&) = delete;
+    ~ALeffectslot();
+
+    static ALeffectslotArray *CreatePtrArray(size_t count) noexcept;
+
+    DEF_NEWDEL(ALeffectslot)
+};
 
 ALenum InitEffectSlot(ALeffectslot *slot);
-void DeinitEffectSlot(ALeffectslot *slot);
 void UpdateEffectSlotProps(ALeffectslot *slot, ALCcontext *context);
 void UpdateAllEffectSlotProps(ALCcontext *context);
-ALvoid ReleaseALAuxiliaryEffectSlots(ALCcontext *Context);
 
 
 EffectStateFactory *NullStateFactory_getFactory(void);
@@ -175,11 +145,5 @@ EffectStateFactory *DedicatedStateFactory_getFactory(void);
 
 
 ALenum InitializeEffect(ALCcontext *Context, ALeffectslot *EffectSlot, ALeffect *effect);
-
-void ALeffectState_DecRef(ALeffectState *state);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif

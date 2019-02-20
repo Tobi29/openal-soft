@@ -2,56 +2,82 @@
 #define BFORMATDEC_H
 
 #include "alMain.h"
-
-
-/* These are the necessary scales for first-order HF responses to play over
- * higher-order 2D (non-periphonic) decoders.
- */
-#define W_SCALE_2H0P   1.224744871f /* sqrt(1.5) */
-#define XYZ_SCALE_2H0P 1.0f
-#define W_SCALE_3H0P   1.414213562f /* sqrt(2) */
-#define XYZ_SCALE_3H0P 1.082392196f
-
-/* These are the necessary scales for first-order HF responses to play over
- * higher-order 3D (periphonic) decoders.
- */
-#define W_SCALE_2H2P   1.341640787f /* sqrt(1.8) */
-#define XYZ_SCALE_2H2P 1.0f
-#define W_SCALE_3H3P   1.695486018f
-#define XYZ_SCALE_3H3P 1.136697713f
-
-
-/* NOTE: These are scale factors as applied to Ambisonics content. Decoder
- * coefficients should be divided by these values to get proper N3D scalings.
- */
-const ALfloat N3D2N3DScale[MAX_AMBI_COEFFS];
-const ALfloat SN3D2N3DScale[MAX_AMBI_COEFFS];
-const ALfloat FuMa2N3DScale[MAX_AMBI_COEFFS];
+#include "filters/splitter.h"
+#include "ambidefs.h"
+#include "almalloc.h"
 
 
 struct AmbDecConf;
-struct BFormatDec;
-struct AmbiUpsampler;
 
 
-struct BFormatDec *bformatdec_alloc();
-void bformatdec_free(struct BFormatDec **dec);
-void bformatdec_reset(struct BFormatDec *dec, const struct AmbDecConf *conf, ALsizei chancount, ALuint srate, const ALsizei chanmap[MAX_OUTPUT_CHANNELS]);
+using ChannelDec = ALfloat[MAX_AMBI_CHANNELS];
 
-/* Decodes the ambisonic input to the given output channels. */
-void bformatdec_process(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[BUFFERSIZE], ALsizei OutChannels, const ALfloat (*restrict InSamples)[BUFFERSIZE], ALsizei SamplesToDo);
+class BFormatDec {
+    static constexpr size_t sHFBand{0};
+    static constexpr size_t sLFBand{1};
+    static constexpr size_t sNumBands{2};
 
-/* Up-samples a first-order input to the decoder's configuration. */
-void bformatdec_upSample(struct BFormatDec *dec, ALfloat (*restrict OutBuffer)[BUFFERSIZE], const ALfloat (*restrict InSamples)[BUFFERSIZE], ALsizei InChannels, ALsizei SamplesToDo);
+    ALuint mEnabled; /* Bitfield of enabled channels. */
+
+    union MatrixU {
+        ALfloat Dual[MAX_OUTPUT_CHANNELS][sNumBands][MAX_AMBI_CHANNELS];
+        ALfloat Single[MAX_OUTPUT_CHANNELS][MAX_AMBI_CHANNELS];
+    } mMatrix;
+
+    /* NOTE: BandSplitter filters are unused with single-band decoding */
+    BandSplitter mXOver[MAX_AMBI_CHANNELS];
+
+    al::vector<std::array<ALfloat,BUFFERSIZE>, 16> mSamples;
+    /* These two alias into Samples */
+    std::array<ALfloat,BUFFERSIZE> *mSamplesHF;
+    std::array<ALfloat,BUFFERSIZE> *mSamplesLF;
+
+    SplitterAllpass mUpAllpass[MAX_OUTPUT_CHANNELS];
+    struct {
+        BandSplitter Splitter;
+        ALfloat Gains[sNumBands];
+    } mUpsampler[4];
+
+    ALsizei mNumChannels;
+    ALboolean mDualBand;
+
+public:
+    void reset(const AmbDecConf *conf, bool allow_2band, ALsizei inchans, ALuint srate, const ALsizei (&chanmap)[MAX_OUTPUT_CHANNELS]);
+
+    void reset(const ALsizei inchans, const ALfloat xover_norm, const ALsizei chancount, const ChannelDec (&chancoeffs)[MAX_OUTPUT_CHANNELS], const ALsizei (&chanmap)[MAX_OUTPUT_CHANNELS]);
+
+    /* Decodes the ambisonic input to the given output channels. */
+    void process(ALfloat (*OutBuffer)[BUFFERSIZE], const ALsizei OutChannels, const ALfloat (*InSamples)[BUFFERSIZE], const ALsizei SamplesToDo);
+
+    /* Up-samples a first-order input to the decoder's configuration. */
+    void upSample(ALfloat (*OutBuffer)[BUFFERSIZE], const ALsizei OutChannels, const ALfloat (*InSamples)[BUFFERSIZE], const ALsizei InChannels, const ALsizei SamplesToDo);
+
+    DEF_NEWDEL(BFormatDec)
+};
 
 
 /* Stand-alone first-order upsampler. Kept here because it shares some stuff
- * with bformatdec. Assumes a periphonic (4-channel) input mix!
+ * with bformatdec.
  */
-struct AmbiUpsampler *ambiup_alloc();
-void ambiup_free(struct AmbiUpsampler **ambiup);
-void ambiup_reset(struct AmbiUpsampler *ambiup, const ALCdevice *device, ALfloat w_scale, ALfloat xyz_scale);
+class AmbiUpsampler {
+    static constexpr size_t sHFBand{0};
+    static constexpr size_t sLFBand{1};
+    static constexpr size_t sNumBands{2};
 
-void ambiup_process(struct AmbiUpsampler *ambiup, ALfloat (*restrict OutBuffer)[BUFFERSIZE], ALsizei OutChannels, const ALfloat (*restrict InSamples)[BUFFERSIZE], ALsizei SamplesToDo);
+    SplitterAllpass mAllpass[MAX_OUTPUT_CHANNELS];
+    alignas(16) ALfloat mSamples[sNumBands][BUFFERSIZE];
+    struct {
+        BandSplitter Splitter;
+        ALfloat Gains[sNumBands];
+    } mInput[4];
+
+public:
+    void reset(const ALsizei out_order, const ALfloat xover_norm);
+    void process(ALfloat (*OutBuffer)[BUFFERSIZE], const ALsizei OutChannels, const ALfloat (*InSamples)[BUFFERSIZE], const ALsizei InChannels, const ALsizei SamplesToDo);
+
+    static std::array<ALfloat,MAX_AMBI_ORDER+1> GetHFOrderScales(const ALsizei in_order, const ALsizei out_order) noexcept;
+
+    DEF_NEWDEL(AmbiUpsampler)
+};
 
 #endif /* BFORMATDEC_H */

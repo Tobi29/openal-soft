@@ -27,6 +27,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 #include <math.h>
 
 #include "AL/al.h"
@@ -133,7 +134,7 @@ int main(int argc, char **argv)
             break;
         else if(strcmp(argv[0], "--channels") == 0 || strcmp(argv[0], "-c") == 0)
         {
-            if(!(argc > 1))
+            if(argc < 2)
             {
                 fprintf(stderr, "Missing argument for option: %s\n", argv[0]);
                 return 1;
@@ -150,7 +151,7 @@ int main(int argc, char **argv)
         }
         else if(strcmp(argv[0], "--bits") == 0 || strcmp(argv[0], "-b") == 0)
         {
-            if(!(argc > 1))
+            if(argc < 2)
             {
                 fprintf(stderr, "Missing argument for option: %s\n", argv[0]);
                 return 1;
@@ -168,7 +169,7 @@ int main(int argc, char **argv)
         }
         else if(strcmp(argv[0], "--rate") == 0 || strcmp(argv[0], "-r") == 0)
         {
-            if(!(argc > 1))
+            if(argc < 2)
             {
                 fprintf(stderr, "Missing argument for option: %s\n", argv[0]);
                 return 1;
@@ -185,7 +186,7 @@ int main(int argc, char **argv)
         }
         else if(strcmp(argv[0], "--time") == 0 || strcmp(argv[0], "-t") == 0)
         {
-            if(!(argc > 1))
+            if(argc < 2)
             {
                 fprintf(stderr, "Missing argument for option: %s\n", argv[0]);
                 return 1;
@@ -202,7 +203,7 @@ int main(int argc, char **argv)
         }
         else if(strcmp(argv[0], "--outfile") == 0 || strcmp(argv[0], "-o") == 0)
         {
-            if(!(argc > 1))
+            if(argc < 2)
             {
                 fprintf(stderr, "Missing argument for option: %s\n", argv[0]);
                 return 1;

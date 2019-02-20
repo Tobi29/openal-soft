@@ -7,11 +7,8 @@
 
 #include "inprogext.h"
 #include "atomic.h"
-#include "rwlock.h"
+#include "vector.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 /* User formats */
 enum UserFmtType {
@@ -36,12 +33,10 @@ enum UserFmtChannels {
     UserFmtBFormat3D, /* WXYZ */
 };
 
-ALsizei BytesFromUserFmt(enum UserFmtType type);
-ALsizei ChannelsFromUserFmt(enum UserFmtChannels chans);
-inline ALsizei FrameSizeFromUserFmt(enum UserFmtChannels chans, enum UserFmtType type)
-{
-    return ChannelsFromUserFmt(chans) * BytesFromUserFmt(type);
-}
+ALsizei BytesFromUserFmt(UserFmtType type);
+ALsizei ChannelsFromUserFmt(UserFmtChannels chans);
+inline ALsizei FrameSizeFromUserFmt(UserFmtChannels chans, UserFmtType type)
+{ return ChannelsFromUserFmt(chans) * BytesFromUserFmt(type); }
 
 
 /* Storable formats */
@@ -66,50 +61,60 @@ enum FmtChannels {
 };
 #define MAX_INPUT_CHANNELS  (8)
 
-ALsizei BytesFromFmt(enum FmtType type);
-ALsizei ChannelsFromFmt(enum FmtChannels chans);
-inline ALsizei FrameSizeFromFmt(enum FmtChannels chans, enum FmtType type)
-{
-    return ChannelsFromFmt(chans) * BytesFromFmt(type);
-}
+/* DevFmtType traits, providing the type, etc given a DevFmtType. */
+template<FmtType T>
+struct FmtTypeTraits { };
+
+template<>
+struct FmtTypeTraits<FmtUByte> { using Type = ALubyte; };
+template<>
+struct FmtTypeTraits<FmtShort> { using Type = ALshort; };
+template<>
+struct FmtTypeTraits<FmtFloat> { using Type = ALfloat; };
+template<>
+struct FmtTypeTraits<FmtDouble> { using Type = ALdouble; };
+template<>
+struct FmtTypeTraits<FmtMulaw> { using Type = ALubyte; };
+template<>
+struct FmtTypeTraits<FmtAlaw> { using Type = ALubyte; };
 
 
-typedef struct ALbuffer {
-    ALvoid  *data;
+ALsizei BytesFromFmt(FmtType type);
+ALsizei ChannelsFromFmt(FmtChannels chans);
+inline ALsizei FrameSizeFromFmt(FmtChannels chans, FmtType type)
+{ return ChannelsFromFmt(chans) * BytesFromFmt(type); }
 
-    ALsizei Frequency;
-    ALbitfieldSOFT Access;
-    ALsizei SampleLen;
 
-    enum FmtChannels FmtChannels;
-    enum FmtType     FmtType;
-    ALsizei BytesAlloc;
+struct ALbuffer {
+    al::vector<ALbyte,16> mData;
 
-    enum UserFmtType OriginalType;
-    ALsizei OriginalSize;
-    ALsizei OriginalAlign;
+    ALsizei Frequency{0};
+    ALbitfieldSOFT Access{0u};
+    ALsizei SampleLen{0};
 
-    ALsizei LoopStart;
-    ALsizei LoopEnd;
+    FmtChannels mFmtChannels{};
+    FmtType     mFmtType{};
+    ALsizei BytesAlloc{0};
 
-    ATOMIC(ALsizei) UnpackAlign;
-    ATOMIC(ALsizei) PackAlign;
+    UserFmtType OriginalType{};
+    ALsizei OriginalSize{0};
+    ALsizei OriginalAlign{0};
 
-    ALbitfieldSOFT MappedAccess;
-    ALsizei MappedOffset;
-    ALsizei MappedSize;
+    ALsizei LoopStart{0};
+    ALsizei LoopEnd{0};
+
+    std::atomic<ALsizei> UnpackAlign{0};
+    std::atomic<ALsizei> PackAlign{0};
+
+    ALbitfieldSOFT MappedAccess{0u};
+    ALsizei MappedOffset{0};
+    ALsizei MappedSize{0};
 
     /* Number of times buffer was attached to a source (deletion can only occur when 0) */
-    RefCount ref;
+    RefCount ref{0u};
 
     /* Self ID */
-    ALuint id;
-} ALbuffer;
-
-ALvoid ReleaseALBuffers(ALCdevice *device);
-
-#ifdef __cplusplus
-}
-#endif
+    ALuint id{0};
+};
 
 #endif
