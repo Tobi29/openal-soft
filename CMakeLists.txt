@@ -712,7 +712,6 @@ SET(OPENAL_OBJS
     OpenAL32/alExtension.cpp
     OpenAL32/Include/alFilter.h
     OpenAL32/alFilter.cpp
-    OpenAL32/alJNI.cpp
     OpenAL32/Include/alListener.h
     OpenAL32/alListener.cpp
     OpenAL32/Include/alSource.h
@@ -776,6 +775,13 @@ SET(ALC_OBJS
     Alc/mixer/hrtfbase.h
     Alc/mixer/mixer_c.cpp
 )
+
+OPTION(ALSOFT_ENABLE_JNI "Enable JNI binding" OFF)
+IF(ALSOFT_ENABLE_JNI)
+    SET(OPENAL_OBJS ${OPENAL_OBJS}
+        OpenAL32/alJNI.cpp
+    )
+ENDIF()
 
 
 SET(CPU_EXTS "Default")
