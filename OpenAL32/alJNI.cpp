@@ -9,7 +9,7 @@
 #define GEN_JNI_FUN_HELPER(pkg, static_clazz, name) Java_##pkg##_##static_clazz##_##name
 #define GEN_JNI_FUN(pkg, static_clazz, name) GEN_JNI_FUN_HELPER(pkg, static_clazz, name)
 
-#define GEN_JNI(rt, fun) JNIEXPORT rt JNICALL fun
+#define GEN_JNI(rt, fun) extern "C" JNIEXPORT rt JNICALL fun
 #define GEN_JNI0(rt, fun) GEN_JNI(rt, fun)( \
     JNIEnv* env, \
     jclass clazz \
